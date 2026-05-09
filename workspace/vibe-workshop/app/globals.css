@@ -1,0 +1,16 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: "Pretendard Variable", "Pretendard", sans-serif;
+  --font-mono: "Geist Mono", monospace;
+}
+
+body {
+  font-family: "Pretendard Variable", "Pretendard", -apple-system, BlinkMacSystemFont,
+    system-ui, sans-serif;
+}
+
+select option {
+  background-color: #171717;
+  color: #ffffff;
+}
