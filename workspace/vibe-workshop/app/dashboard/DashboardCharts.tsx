@@ -25,19 +25,20 @@ ChartJS.register(
 );
 
 const COLORS = [
-  "#f97316",
-  "#fb923c",
-  "#fdba74",
-  "#fde68a",
-  "#d97706",
-  "#b45309",
-  "#a3a3a3",
-  "#737373",
+  "#ff6b35",
+  "#ff8c5a",
+  "#ffad80",
+  "#ffcba4",
+  "#e85d20",
+  "#c44d18",
+  "#6b7280",
+  "#4b5563",
 ];
 
-const GRID = "rgba(255,255,255,0.08)";
-const TICK = "#737373";
-const LEGEND_LABEL = { color: "#a3a3a3", font: { size: 11 }, boxWidth: 10 };
+const BG = "#1a1a2e";
+const GRID = "rgba(255,255,255,0.07)";
+const TICK = "#6b7280";
+const LEGEND_LABEL = { color: "#9ca3af", font: { size: 11 }, boxWidth: 10 };
 
 type Props = {
   deptLabels: string[];
@@ -74,7 +75,7 @@ export default function DashboardCharts({
       {
         data: deptData,
         backgroundColor: COLORS,
-        borderColor: "#0a0a0a",
+        borderColor: BG,
         borderWidth: 2,
       },
     ],
@@ -85,7 +86,7 @@ export default function DashboardCharts({
     datasets: [
       {
         data: aiData,
-        backgroundColor: "#f97316",
+        backgroundColor: "#ff6b35",
         borderRadius: 4,
       },
     ],
@@ -97,7 +98,7 @@ export default function DashboardCharts({
       {
         data: goalData,
         backgroundColor: COLORS,
-        borderColor: "#0a0a0a",
+        borderColor: BG,
         borderWidth: 2,
       },
     ],
@@ -109,23 +110,22 @@ export default function DashboardCharts({
       {
         label: "신청 수",
         data: dailyData,
-        borderColor: "#f97316",
-        backgroundColor: "rgba(249,115,22,0.12)",
+        borderColor: "#ff6b35",
+        backgroundColor: "rgba(255,107,53,0.12)",
         fill: true,
         tension: 0.4,
-        pointBackgroundColor: "#f97316",
+        pointBackgroundColor: "#ff6b35",
         pointRadius: 4,
       },
     ],
   };
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-12">
-      {/* 소속 팀별 도넛 */}
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
       <div>
-        <p className="text-xs text-neutral-500 mb-6">소속 팀별 신청 분포</p>
+        <p className="text-xs text-neutral-500 mb-5">소속 팀별 신청 분포</p>
         {hasData(deptData) ? (
-          <div className="max-w-[280px] mx-auto">
+          <div className="max-w-[260px] mx-auto">
             <Doughnut
               data={doughnutData}
               options={{
@@ -139,9 +139,8 @@ export default function DashboardCharts({
         )}
       </div>
 
-      {/* AI 경험 수평 바 */}
       <div>
-        <p className="text-xs text-neutral-500 mb-6">AI 도구 사용 경험 분포</p>
+        <p className="text-xs text-neutral-500 mb-5">AI 도구 사용 경험 분포</p>
         {hasData(aiData) ? (
           <Bar
             data={barData}
@@ -155,7 +154,7 @@ export default function DashboardCharts({
                   grid: { color: GRID },
                 },
                 y: {
-                  ticks: { color: "#a3a3a3", font: { size: 11 } },
+                  ticks: { color: "#9ca3af", font: { size: 11 } },
                   grid: { display: false },
                 },
               },
@@ -166,11 +165,10 @@ export default function DashboardCharts({
         )}
       </div>
 
-      {/* 배우고 싶은 것 파이 */}
       <div>
-        <p className="text-xs text-neutral-500 mb-6">가장 배우고 싶은 것 분포</p>
+        <p className="text-xs text-neutral-500 mb-5">가장 배우고 싶은 것 분포</p>
         {hasData(goalData) ? (
-          <div className="max-w-[280px] mx-auto">
+          <div className="max-w-[260px] mx-auto">
             <Pie
               data={pieData}
               options={{
@@ -184,9 +182,8 @@ export default function DashboardCharts({
         )}
       </div>
 
-      {/* 일별 신청 추이 라인 */}
       <div>
-        <p className="text-xs text-neutral-500 mb-6">일별 신청 추이 (최근 7일)</p>
+        <p className="text-xs text-neutral-500 mb-5">일별 신청 추이 (최근 7일)</p>
         <Line
           data={lineData}
           options={{

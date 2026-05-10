@@ -62,10 +62,9 @@ const formatDateTime = (iso: string): string =>
   }).format(new Date(iso));
 
 export default async function DashboardPage() {
-  const { data } = await supabase
-    .from("signups")
-    .select("*")
-    .order("created_at", { ascending: false });
+  const { data } = supabase
+    ? await supabase.from("signups").select("*").order("created_at", { ascending: false })
+    : { data: [] };
 
   const rows: Signup[] = data ?? [];
   const total = rows.length;
@@ -105,20 +104,23 @@ export default async function DashboardPage() {
   ];
 
   return (
-    <main className="min-h-screen bg-neutral-950 text-white">
-      <div className="max-w-6xl mx-auto px-6 py-16">
+    <main className="min-h-screen bg-[#0f0f1a] text-white">
+      <div className="max-w-6xl mx-auto px-5 sm:px-8 py-16">
 
-        <h1 className="text-2xl font-semibold mb-2">신청 현황</h1>
+        <h1 className="text-2xl font-bold mb-1">신청 현황</h1>
         <p className="text-sm text-neutral-400 mb-12">
           AI 바이브 코딩 마스터클래스
         </p>
 
         {/* 요약 카드 */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-px bg-white/10 border border-white/10 rounded-lg overflow-hidden mb-16">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-16">
           {summaryCards.map((card, i) => (
-            <div key={i} className="bg-neutral-950 px-6 py-6">
+            <div
+              key={i}
+              className="bg-[#1a1a2e] rounded-2xl px-5 py-5 shadow-lg shadow-black/30 border border-white/5"
+            >
               <p className="text-xs text-neutral-500 mb-3">{card.label}</p>
-              <p className="text-2xl font-semibold leading-tight">
+              <p className="text-2xl font-bold leading-tight truncate">
                 {card.value}
                 {card.unit && (
                   <span className="text-sm text-neutral-400 font-normal ml-1">
@@ -131,7 +133,7 @@ export default async function DashboardPage() {
         </div>
 
         {/* 차트 */}
-        <div className="border-t border-white/10 pt-12 mb-16">
+        <div className="bg-[#1a1a2e] rounded-2xl border border-white/5 shadow-lg shadow-black/30 p-6 sm:p-8 mb-12">
           <DashboardCharts
             deptLabels={DEPARTMENTS}
             deptData={deptData}
@@ -145,10 +147,10 @@ export default async function DashboardPage() {
         </div>
 
         {/* 신청자 목록 */}
-        <div className="border-t border-white/10 pt-12">
-          <p className="text-xs text-neutral-500 mb-6">
+        <div className="bg-[#1a1a2e] rounded-2xl border border-white/5 shadow-lg shadow-black/30 p-6 sm:p-8">
+          <p className="text-sm font-semibold mb-6">
             신청자 목록{" "}
-            <span className="text-white font-medium">{total}명</span>
+            <span className="text-[#ff6b35] ml-1">{total}명</span>
           </p>
 
           {total === 0 ? (
@@ -179,23 +181,15 @@ export default async function DashboardPage() {
                       key={row.id}
                       className="border-b border-white/5 hover:bg-white/[0.03] transition-colors"
                     >
-                      <td className="py-3 pr-6 whitespace-nowrap">{row.name}</td>
-                      <td className="py-3 pr-6 text-neutral-400">{row.email}</td>
-                      <td className="py-3 pr-6 whitespace-nowrap text-neutral-300">
-                        {row.department}
-                      </td>
-                      <td className="py-3 pr-6 whitespace-nowrap text-neutral-300">
-                        {row.position}
-                      </td>
-                      <td className="py-3 pr-6 whitespace-nowrap text-neutral-300">
-                        {row.ai_experience}
-                      </td>
-                      <td className="py-3 pr-6 whitespace-nowrap text-neutral-300">
-                        {row.learning_goal}
-                      </td>
+                      <td className="py-3 pr-6 whitespace-nowrap font-medium">{row.name}</td>
+                      <td className="py-3 pr-6 text-neutral-400 text-xs">{row.email}</td>
+                      <td className="py-3 pr-6 whitespace-nowrap text-neutral-300">{row.department}</td>
+                      <td className="py-3 pr-6 whitespace-nowrap text-neutral-300">{row.position}</td>
+                      <td className="py-3 pr-6 whitespace-nowrap text-neutral-300">{row.ai_experience}</td>
+                      <td className="py-3 pr-6 whitespace-nowrap text-neutral-300">{row.learning_goal}</td>
                       <td className="py-3 pr-6 whitespace-nowrap">
                         {row.dietary_restrictions ? (
-                          <span className="inline-block bg-yellow-500/20 text-yellow-200 text-xs px-2 py-0.5 rounded">
+                          <span className="inline-block bg-yellow-400/20 text-yellow-200 text-xs px-2 py-0.5 rounded">
                             {row.dietary_restrictions}
                           </span>
                         ) : (
