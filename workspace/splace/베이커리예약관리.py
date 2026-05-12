@@ -304,7 +304,8 @@ class App(tk.Tk):
         for txt, cmd in [('🔄  새로고침 (최신파일)', self._load),
                           ('📂  파일 직접 선택', self._load_pick),
                           ('📊  통계 파일 업데이트', self._update_stats),
-                          ('📋  예약 목록 인쇄', self._print_all_orders)]:
+                          ('📋  예약 목록 인쇄', self._print_all_orders),
+                          ('🖨  전체 영수증 출력', self._print_all_receipts)]:
             tk.Button(bar, text=txt, command=cmd,
                       bg=BG_ITEM, fg=WHITE, activebackground=ORANGE,
                       activeforeground=WHITE, relief='flat',
@@ -674,6 +675,26 @@ class App(tk.Tk):
                   bg=BG_ITEM, fg=WHITE, activebackground='#3a3a6e',
                   relief='flat', font=('맑은 고딕', 11),
                   padx=20, pady=8, cursor='hand2').pack(side='left', padx=8)
+
+    def _print_all_receipts(self):
+        if not self.orders:
+            messagebox.showwarning('경고', '예약 데이터가 없습니다.')
+            return
+        active = [o for o in self.orders if '취소' not in str(o['status'])]
+        ans = messagebox.askyesno(
+            '전체 영수증 출력',
+            f'총 {len(active)}건 영수증을 순서대로 출력합니다.\n(취소 건 제외)\n\n계속하시겠습니까?'
+        )
+        if not ans:
+            return
+        kp = self.var_kiosk_printer.get()
+        printer_name = kp if kp and kp != '(기본 프린터 사용)' else None
+        for i, o in enumerate(active):
+            self.lbl_status.config(text=f'출력 중... {i+1}/{len(active)}  ({o["reserver"]})')
+            self.update()
+            print_receipt(o, printer_name=printer_name)
+            self.after(800)
+        self.lbl_status.config(text=f'✅ 전체 영수증 출력 완료 — {len(active)}건')
 
     def _print_all_orders(self):
         if not self.orders:
