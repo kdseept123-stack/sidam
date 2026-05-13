@@ -731,46 +731,78 @@ class LogenApp:
         frame.wait_for_timeout(6000)
         page.remove_listener('dialog', _auto_accept)
 
-        # ── 변환완료 탭으로 전환 → 운송장번호 읽기 ──────────────
+        # ── 변환완료 탭으로 전환 ─────────────────────────────────
         try:
             frame.click('text=변환완료', timeout=3000)
-            frame.wait_for_timeout(4000)  # 그리드 렌더링 대기
+            frame.wait_for_timeout(2000)
         except Exception:
             pass
 
-        # JS로 전체 페이지에서 12자리 번호 추출 (inner_text 2000자 제한 우회)
-        tracking_nos = frame.evaluate("""
-            () => {
-                const seen = new Set();
-                const results = [];
-                const add = v => { if (v && !seen.has(v)) { seen.add(v); results.push(v); } };
+        # ── 운송장출력 클릭 (이 시점에 운송장번호가 할당됨) ─────
+        # 새 창이 열릴 수 있으므로 intercept 후 거기서 번호 추출
+        tracking_nos = []
+        try:
+            with page.context.expect_page(timeout=12000) as new_pg_info:
+                try:
+                    frame.click('text=3.운송장출력', timeout=5000)
+                except Exception:
+                    frame.click('text=운송장출력', timeout=5000)
 
-                // innerText 전체 스캔
-                const text = document.body.innerText || '';
-                (text.match(/\\b\\d{12}\\b/g) || []).forEach(add);
+            new_pg = new_pg_info.value
+            new_pg.wait_for_load_state('domcontentloaded', timeout=15000)
+            frame.wait_for_timeout(2000)
 
-                // td 개별 스캔 (innerText로 안 잡히는 셀 대비)
-                document.querySelectorAll('td').forEach(el => {
-                    const v = (el.innerText || '').trim();
-                    if (/^\\d{12}$/.test(v)) add(v);
-                });
+            # 새 창(인쇄 미리보기)에서 12자리 운송장번호 추출
+            tracking_nos = new_pg.evaluate("""
+                () => {
+                    const seen = new Set();
+                    const results = [];
+                    const add = v => { if (v && !seen.has(v)) { seen.add(v); results.push(v); } };
+                    const text = document.body.innerText || '';
+                    (text.match(/\\b\\d{12}\\b/g) || []).forEach(add);
+                    document.querySelectorAll('td, span, div').forEach(el => {
+                        const v = (el.innerText || '').trim();
+                        if (/^\\d{12}$/.test(v)) add(v);
+                    });
+                    document.querySelectorAll('input').forEach(el => {
+                        const v = (el.value || '').trim();
+                        if (/^\\d{12}$/.test(v)) add(v);
+                    });
+                    return results;
+                }
+            """)
+            logging.info("운송장 출력창 운송장번호: %s", tracking_nos)
+            new_pg.close()
 
-                // input value 스캔 (hidden 필드 포함)
-                document.querySelectorAll('input').forEach(el => {
-                    const v = (el.value || '').trim();
-                    if (/^\\d{12}$/.test(v)) add(v);
-                });
+        except Exception as e:
+            logging.warning("운송장출력 새 창 없음 (%s) → 다이얼로그/인라인 처리", e)
+            try:
+                page.click('text=확인', timeout=2000)
+            except Exception:
+                pass
 
-                return results;
-            }
-        """)
-        logging.info("JS 추출 운송장번호 후보: %s", tracking_nos)
-
-        # fallback: Playwright inner_text 전체
+        # 새 창에서 못 찾으면: 출력 후 변환완료 탭 그리드에서 재시도
         if not tracking_nos:
-            result_text = frame.inner_text('body')
-            logging.debug("변환완료 body 전체(앞5000자): %s", result_text[:5000])
-            tracking_nos = re.findall(r'\b(\d{12})\b', result_text)
+            frame.wait_for_timeout(4000)
+            tracking_nos = frame.evaluate("""
+                () => {
+                    const seen = new Set();
+                    const results = [];
+                    const add = v => { if (v && !seen.has(v)) { seen.add(v); results.push(v); } };
+                    const text = document.body.innerText || '';
+                    (text.match(/\\b\\d{12}\\b/g) || []).forEach(add);
+                    document.querySelectorAll('td').forEach(el => {
+                        const v = (el.innerText || '').trim();
+                        if (/^\\d{12}$/.test(v)) add(v);
+                    });
+                    document.querySelectorAll('input').forEach(el => {
+                        const v = (el.value || '').trim();
+                        if (/^\\d{12}$/.test(v)) add(v);
+                    });
+                    return results;
+                }
+            """)
+            logging.info("변환완료 탭 재시도 운송장번호: %s", tracking_nos)
 
         # 중복 제거 (순서 유지)
         seen = set()
@@ -782,21 +814,8 @@ class LogenApp:
 
         # index → tracking_no 매핑
         tracking_map = {i: unique_nos[i] for i in range(min(total, len(unique_nos)))}
-
         self._set_status(f"운송장번호 {len(unique_nos)}건 확인됨")
-
-        # ── 운송장 출력 ──────────────────────────────────────────
-        try:
-            frame.click('text=운송장출력', timeout=5000)
-            frame.wait_for_timeout(3000)
-            for popup_text in ['확인', '예', 'OK']:
-                try:
-                    page.click(f'text={popup_text}', timeout=2000)
-                    break
-                except Exception:
-                    pass
-        except Exception:
-            pass
+        logging.info("최종 tracking_map: %s", tracking_map)
 
         return tracking_map
 
