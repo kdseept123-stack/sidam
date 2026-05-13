@@ -923,8 +923,23 @@ class LogenApp:
         tmp.write(html)
         tmp.close()
         url = 'file:///' + tmp.name.replace('\\', '/')
-        # 파일 연결 프로그램(메모장 등)이 아닌 기본 브라우저로 강제 오픈
-        subprocess.Popen(['rundll32', 'url.dll,FileProtocolHandler', url])
+
+        # Chrome / Edge / Firefox 순으로 직접 실행
+        browser_paths = [
+            r'C:\Program Files\Google\Chrome\Application\chrome.exe',
+            r'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe',
+            r'C:\Program Files\Microsoft\Edge\Application\msedge.exe',
+            r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
+            r'C:\Program Files\Mozilla Firefox\firefox.exe',
+        ]
+        opened = False
+        for bp in browser_paths:
+            if os.path.exists(bp):
+                subprocess.Popen([bp, url])
+                opened = True
+                break
+        if not opened:
+            subprocess.Popen(['rundll32', 'url.dll,FileProtocolHandler', url])
 
     def save_smartstore_excel(self):
         done = [o for o in self.orders if o['_tracking']]
