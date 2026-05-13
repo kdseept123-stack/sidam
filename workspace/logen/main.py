@@ -227,7 +227,10 @@ class LogenApp:
 
             col_map = self._map_columns(headers)
 
-            # Show detected columns in status for debugging
+            # 헤더 전체와 매핑 결과 로그
+            logging.info("엑셀 헤더: %s", dict(headers))
+            logging.info("컬럼 매핑: %s", {k: (v, headers.get(v)) for k, v in col_map.items() if v})
+
             detected = {k: v for k, v in col_map.items() if v}
             self._set_status(f"컬럼 인식: {list(detected.keys())}")
 
@@ -237,7 +240,16 @@ class LogenApp:
                 for field, col_idx in col_map.items():
                     if col_idx:
                         v = ws.Cells(r, col_idx).Value
-                        order[field] = str(v).strip() if v is not None else ''
+                        if v is None:
+                            order[field] = ''
+                        elif field == '수량':
+                            # 수량은 정수로 변환; 실패하면 원본 유지
+                            try:
+                                order[field] = str(int(float(str(v))))
+                            except (ValueError, TypeError):
+                                order[field] = str(v).strip()
+                        else:
+                            order[field] = str(v).strip()
 
                 if not order['상품주문번호'] and not order['수취인명']:
                     continue  # empty row
@@ -262,6 +274,14 @@ class LogenApp:
     def _map_columns(self, headers):
         result = {field: None for field in COLUMN_CANDIDATES}
         for field, candidates in COLUMN_CANDIDATES.items():
+            # Pass 1: exact match (prevents '수량' from matching '수량클레임 여부')
+            for col_idx, col_name in headers.items():
+                if col_name in candidates:
+                    result[field] = col_idx
+                    break
+            if result[field]:
+                continue
+            # Pass 2: substring fallback
             for col_idx, col_name in headers.items():
                 for cand in candidates:
                     if cand in col_name or col_name in cand:
@@ -714,13 +734,43 @@ class LogenApp:
         # ── 변환완료 탭으로 전환 → 운송장번호 읽기 ──────────────
         try:
             frame.click('text=변환완료', timeout=3000)
-            frame.wait_for_timeout(2000)
+            frame.wait_for_timeout(4000)  # 그리드 렌더링 대기
         except Exception:
             pass
 
-        result_text = frame.inner_text('body')
-        logging.debug("변환완료 body(2000자): %s", result_text[:2000])
-        tracking_nos = re.findall(r'\b(\d{12})\b', result_text)
+        # JS로 전체 페이지에서 12자리 번호 추출 (inner_text 2000자 제한 우회)
+        tracking_nos = frame.evaluate("""
+            () => {
+                const seen = new Set();
+                const results = [];
+                const add = v => { if (v && !seen.has(v)) { seen.add(v); results.push(v); } };
+
+                // innerText 전체 스캔
+                const text = document.body.innerText || '';
+                (text.match(/\\b\\d{12}\\b/g) || []).forEach(add);
+
+                // td 개별 스캔 (innerText로 안 잡히는 셀 대비)
+                document.querySelectorAll('td').forEach(el => {
+                    const v = (el.innerText || '').trim();
+                    if (/^\\d{12}$/.test(v)) add(v);
+                });
+
+                // input value 스캔 (hidden 필드 포함)
+                document.querySelectorAll('input').forEach(el => {
+                    const v = (el.value || '').trim();
+                    if (/^\\d{12}$/.test(v)) add(v);
+                });
+
+                return results;
+            }
+        """)
+        logging.info("JS 추출 운송장번호 후보: %s", tracking_nos)
+
+        # fallback: Playwright inner_text 전체
+        if not tracking_nos:
+            result_text = frame.inner_text('body')
+            logging.debug("변환완료 body 전체(앞5000자): %s", result_text[:5000])
+            tracking_nos = re.findall(r'\b(\d{12})\b', result_text)
 
         # 중복 제거 (순서 유지)
         seen = set()
