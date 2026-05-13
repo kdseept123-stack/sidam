@@ -152,6 +152,11 @@ class LogenApp:
             font=('맑은 고딕', 11), padx=10, pady=6, state='disabled')
         self.retry_btn.pack(side='left', padx=5)
 
+        self.print_btn = tk.Button(
+            btn_frame, text="🖨 목록 출력", command=self.print_order_list,
+            font=('맑은 고딕', 11), padx=10, pady=6, state='disabled')
+        self.print_btn.pack(side='left', padx=5)
+
         # ── Progress bar ─────────────────────────────────────
         self.progress = ttk.Progressbar(self.root, mode='determinate')
         self.progress.pack(fill='x', padx=8, pady=(2, 0))
@@ -183,6 +188,7 @@ class LogenApp:
             self._refresh_table()
             self.start_btn.config(state='normal')
             self.save_btn.config(state='normal')
+            self.print_btn.config(state='normal')
             self._set_status(f"총 {len(self.orders)}건 로드 완료")
         except Exception as e:
             import traceback
@@ -855,6 +861,70 @@ class LogenApp:
     # ──────────────────────────────────────────────────────────
     # Smart Store upload Excel
     # ──────────────────────────────────────────────────────────
+
+    def print_order_list(self):
+        targets = [o for o in self.orders if o['_selected']]
+        if not targets:
+            messagebox.showinfo("알림", "선택된 주문이 없습니다.")
+            return
+
+        bundle_map = self._build_bundle_map()
+        now = datetime.now().strftime('%Y-%m-%d %H:%M')
+        total_qty = sum(int(o.get('수량', 1) or 1) for o in targets)
+
+        rows_html = ''
+        for i, o in enumerate(targets, 1):
+            key = self._bundle_key(o)
+            is_bundle = len(bundle_map[key]) > 1
+            status = o.get('_tracking') or ('묶음' if is_bundle else '')
+            bg = ' style="background:#E3F2FD"' if is_bundle else ''
+            rows_html += (
+                f'<tr{bg}>'
+                f'<td>{i}</td>'
+                f'<td>{o.get("수취인명","")}</td>'
+                f'<td class="left">{o.get("상품명","")[:50]}</td>'
+                f'<td>{o.get("수량","")}</td>'
+                f'<td>{o.get("수취인전화번호","")}</td>'
+                f'<td class="left">{o.get("배송주소","")[:40]}</td>'
+                f'<td class="left">{o.get("배송메세지","")[:30]}</td>'
+                f'<td>{status}</td>'
+                f'</tr>\n'
+            )
+
+        html = f"""<!DOCTYPE html>
+<html lang="ko"><head><meta charset="UTF-8">
+<title>발송 목록</title>
+<style>
+  body {{ font-family: '맑은 고딕', sans-serif; font-size: 11px; margin: 16px; }}
+  h2 {{ font-size: 14px; margin-bottom: 4px; }}
+  p  {{ font-size: 11px; color: #555; margin: 2px 0 8px; }}
+  table {{ border-collapse: collapse; width: 100%; }}
+  th, td {{ border: 1px solid #aaa; padding: 3px 5px; text-align: center; white-space: nowrap; }}
+  th {{ background: #1976D2; color: white; font-size: 11px; }}
+  td.left {{ text-align: left; }}
+  tr:nth-child(even) {{ background: #f5f5f5; }}
+  @media print {{ body {{ margin: 4px; }} }}
+</style>
+</head><body>
+<h2>발송 목록 — {now}</h2>
+<p>선택 {len(targets)}건 · 총 수량 {total_qty}개</p>
+<table>
+<thead><tr>
+  <th>No.</th><th>수취인</th><th>상품명</th><th>수량</th>
+  <th>전화번호</th><th>주소</th><th>배송메세지</th><th>상태</th>
+</tr></thead>
+<tbody>
+{rows_html}</tbody>
+</table>
+<script>window.onload = function(){{ window.print(); }};</script>
+</body></html>"""
+
+        import tempfile, webbrowser
+        tmp = tempfile.NamedTemporaryFile(
+            suffix='.html', delete=False, mode='w', encoding='utf-8')
+        tmp.write(html)
+        tmp.close()
+        webbrowser.open(f'file:///{tmp.name.replace(chr(92), "/")}')
 
     def save_smartstore_excel(self):
         done = [o for o in self.orders if o['_tracking']]
