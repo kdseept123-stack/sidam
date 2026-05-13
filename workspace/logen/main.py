@@ -885,9 +885,7 @@ class LogenApp:
                 f'<td class="left">{o.get("상품명","")[:50]}</td>'
                 f'<td>{o.get("수량","")}</td>'
                 f'<td>{o.get("수취인전화번호","")}</td>'
-                f'<td class="left">{o.get("배송주소","")[:40]}</td>'
                 f'<td class="left">{o.get("배송메세지","")[:30]}</td>'
-                f'<td>{status}</td>'
                 f'</tr>\n'
             )
 
@@ -911,7 +909,7 @@ class LogenApp:
 <table>
 <thead><tr>
   <th>No.</th><th>수취인</th><th>상품명</th><th>수량</th>
-  <th>전화번호</th><th>주소</th><th>배송메세지</th><th>상태</th>
+  <th>전화번호</th><th>배송메세지</th>
 </tr></thead>
 <tbody>
 {rows_html}</tbody>
