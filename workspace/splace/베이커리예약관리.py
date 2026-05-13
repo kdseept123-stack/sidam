@@ -59,14 +59,77 @@ def get_printers():
         return []
 
 def print_html_to_printer(html_path, printer_name=None):
+    import subprocess as sp
+    abs_path = os.path.abspath(html_path)
     if printer_name and printer_name != '(기본 프린터 사용)':
-        ctypes.windll.shell32.ShellExecuteW(
-            None, 'printto', os.path.abspath(html_path),
-            f'"{printer_name}"', None, 0
+        ret = ctypes.windll.shell32.ShellExecuteW(
+            None, 'printto', abs_path, printer_name, None, 0
         )
+        if ret <= 32:
+            sp.Popen(['start', '', abs_path], shell=True)
     else:
-        import subprocess as sp
-        sp.Popen(['start', '', html_path], shell=True)
+        sp.Popen(['start', '', abs_path], shell=True)
+
+# ── ESC/POS 직접 출력 ──────────────────────────────────────
+
+def _e(text):
+    return text.encode('cp949', errors='replace')
+
+def make_receipt_escpos(order):
+    ESC = b'\x1b'
+    GS  = b'\x1d'
+    SEP = b'-' * 32 + b'\n'
+
+    grouped = defaultdict(lambda: {'price': 0, 'count': 0})
+    for item in order['items']:
+        grouped[item['option']]['price'] = item['price']
+        grouped[item['option']]['count'] += 1
+
+    lines = bytearray()
+    lines += ESC + b'@'           # 초기화
+    lines += ESC + b'a\x01'      # 중앙 정렬
+    lines += ESC + b'E\x01'      # 굵게
+    lines += _e(STORE_NAME) + b'\n'
+    lines += ESC + b'E\x00'
+    lines += b'=' * 32 + b'\n'
+    lines += ESC + b'a\x00'      # 왼쪽 정렬
+    lines += _e(f'예약자: {order["reserver"]}  {order["phone"]}') + b'\n'
+    lines += _e(f'픽업:   {order["use_date"]}') + b'\n'
+    lines += SEP
+
+    for opt, v in grouped.items():
+        subtotal = v['price'] * v['count']
+        name = opt[:13] if len(opt) > 13 else opt
+        row = f'{name:<13}{v["count"]:>3}개 {subtotal:>9,}원'
+        lines += _e(row) + b'\n'
+
+    lines += b'=' * 32 + b'\n'
+    lines += ESC + b'E\x01'
+    lines += _e(f'실결제: {order["final"]:,}원') + b'\n'
+    lines += ESC + b'E\x00'
+    lines += _e(f'결제:   {order["payment"]}') + b'\n'
+    if order['request']:
+        lines += SEP
+        lines += _e(f'요청:   {order["request"]}') + b'\n'
+    lines += b'\n'
+    lines += ESC + b'a\x01'
+    lines += '감사합니다 ♡\n'.encode('cp949', errors='replace')
+    lines += b'\n\n\n'
+    lines += GS + b'V\x41\x00'  # 부분 컷
+    return bytes(lines)
+
+def print_receipt_direct(order, printer_name):
+    import win32print
+    data = make_receipt_escpos(order)
+    hp = win32print.OpenPrinter(printer_name)
+    try:
+        win32print.StartDocPrinter(hp, 1, ('Receipt', None, 'RAW'))
+        win32print.StartPagePrinter(hp)
+        win32print.WritePrinter(hp, data)
+        win32print.EndPagePrinter(hp)
+        win32print.EndDocPrinter(hp)
+    finally:
+        win32print.ClosePrinter(hp)
 
 # ── 파일 처리 ─────────────────────────────────────────────
 
@@ -221,6 +284,52 @@ def print_receipt(order, printer_name=None):
     tmp.write(html)
     tmp.close()
     print_html_to_printer(tmp.name, printer_name)
+
+def make_all_receipts_html(orders):
+    parts = []
+    for order in orders:
+        grouped = defaultdict(lambda: {'price': 0, 'count': 0})
+        for item in order['items']:
+            grouped[item['option']]['price'] = item['price']
+            grouped[item['option']]['count'] += 1
+        items_html = ''
+        for opt, v in grouped.items():
+            subtotal = v['price'] * v['count']
+            items_html += (f'<tr><td>{opt}</td>'
+                           f'<td class="num">{v["count"]}</td>'
+                           f'<td class="num">{v["price"]:,}원</td>'
+                           f'<td class="num">{subtotal:,}원</td></tr>')
+        req = f'<p class="req">요청: {order["request"]}</p>' if order['request'] else ''
+        parts.append(f'''<div class="receipt">
+<h2>🥖 {STORE_NAME}</h2>
+<div class="info"><b>예약자:</b> {order["reserver"]}<br>
+<b>연락처:</b> {order["phone"]}<br>
+<b>픽업일시:</b> {order["use_date"]}</div>
+<table><tr><th>상품</th><th>수량</th><th>단가</th><th>소계</th></tr>{items_html}</table>
+<div class="total">실결제금액: {order["final"]:,}원</div>
+<div class="info" style="margin-top:6px">결제수단: {order["payment"]}</div>
+{req}<div class="footer">감사합니다 ♡</div>
+</div>''')
+    return f'''<!DOCTYPE html><html><head><meta charset="utf-8">
+<style>
+  *{{margin:0;padding:0;box-sizing:border-box}}
+  body{{font-family:"맑은 고딕",sans-serif}}
+  .receipt{{width:300px;margin:0 auto;padding:16px;font-size:13px;page-break-after:always}}
+  .receipt:last-child{{page-break-after:auto}}
+  h2{{text-align:center;font-size:15px;border-bottom:2px solid #333;padding-bottom:6px;margin-bottom:10px}}
+  .info{{margin-bottom:10px;line-height:1.7}}
+  table{{width:100%;border-collapse:collapse;margin:10px 0}}
+  th{{background:#333;color:#fff;padding:4px 6px;font-size:11px}}
+  td{{padding:4px 6px;border-bottom:1px solid #eee;font-size:12px}}
+  .num{{text-align:right}}
+  .total{{font-weight:bold;font-size:14px;text-align:right;border-top:2px solid #333;padding-top:6px;margin-top:6px}}
+  .req{{margin-top:8px;color:#555;font-size:12px}}
+  .footer{{text-align:center;margin-top:14px;font-size:12px;color:#777;border-top:1px solid #ccc;padding-top:8px}}
+</style>
+<script>window.onload = function(){{ setTimeout(function(){{ window.print(); }}, 600); }}</script>
+</head><body>
+{''.join(parts)}
+</body></html>'''
 
 def make_all_orders_html(orders):
     today = datetime.date.today().strftime('%Y년 %m월 %d일')
@@ -659,10 +768,12 @@ class App(tk.Tk):
         def do_print():
             try:
                 kp = self.var_kiosk_printer.get()
-                print_receipt(order, printer_name=kp if kp != '(기본 프린터 사용)' else None)
-                msg = f'키오스크 프린터({kp})로 전송됐습니다.' if kp and kp != '(기본 프린터 사용)' \
-                      else '브라우저에서 영수증이 열렸습니다 — Ctrl+P로 인쇄하세요'
-                self.lbl_status.config(text=msg)
+                if kp and kp != '(기본 프린터 사용)':
+                    print_receipt_direct(order, kp)
+                    self.lbl_status.config(text=f'키오스크 프린터({kp})로 출력됐습니다.')
+                else:
+                    print_receipt(order, printer_name=None)
+                    self.lbl_status.config(text='브라우저에서 영수증이 열렸습니다 — Ctrl+P로 인쇄하세요')
                 win.destroy()
             except Exception as e:
                 messagebox.showerror('출력 오류', str(e))
@@ -683,18 +794,32 @@ class App(tk.Tk):
         active = [o for o in self.orders if '취소' not in str(o['status'])]
         ans = messagebox.askyesno(
             '전체 영수증 출력',
-            f'총 {len(active)}건 영수증을 순서대로 출력합니다.\n(취소 건 제외)\n\n계속하시겠습니까?'
+            f'총 {len(active)}건 영수증을 한 번에 출력합니다.\n(취소 건 제외)\n\n계속하시겠습니까?'
         )
         if not ans:
             return
         kp = self.var_kiosk_printer.get()
         printer_name = kp if kp and kp != '(기본 프린터 사용)' else None
-        for i, o in enumerate(active):
-            self.lbl_status.config(text=f'출력 중... {i+1}/{len(active)}  ({o["reserver"]})')
-            self.update()
-            print_receipt(o, printer_name=printer_name)
-            self.after(800)
-        self.lbl_status.config(text=f'✅ 전체 영수증 출력 완료 — {len(active)}건')
+        if printer_name:
+            try:
+                for i, o in enumerate(active):
+                    self.lbl_status.config(text=f'출력 중... {i+1}/{len(active)}  ({o["reserver"]})')
+                    self.update()
+                    print_receipt_direct(o, printer_name)
+                self.lbl_status.config(text=f'✅ 전체 영수증 출력 완료 — {len(active)}건')
+            except Exception as e:
+                messagebox.showerror('출력 오류', str(e))
+        else:
+            html = make_all_receipts_html(active)
+            tmp = tempfile.NamedTemporaryFile(
+                mode='w', suffix='.html', encoding='utf-8', delete=False,
+                dir=tempfile.gettempdir()
+            )
+            tmp.write(html)
+            tmp.close()
+            import subprocess as sp
+            sp.Popen(['start', '', os.path.abspath(tmp.name)], shell=True)
+            self.lbl_status.config(text=f'브라우저가 열렸습니다 — Ctrl+P로 인쇄하세요  ({len(active)}건)')
 
     def _print_all_orders(self):
         if not self.orders:

@@ -1,0 +1,6 @@
+logen/config.json
+logen/history.json
+__pycache__/
+*.pyc
+.agents/
+skills-lock.json
