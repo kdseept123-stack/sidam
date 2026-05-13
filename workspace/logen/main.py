@@ -727,9 +727,8 @@ class LogenApp:
         logging.info("서버전송 클릭")
         frame.click('text=서버전송', timeout=5000)
 
-        # 전송 처리 대기
-        frame.wait_for_timeout(6000)
-        page.remove_listener('dialog', _auto_accept)
+        # 전송 처리 대기 (dialog handler는 운송장출력까지 유지)
+        frame.wait_for_timeout(8000)
 
         # ── 변환완료 탭으로 전환 ─────────────────────────────────
         try:
@@ -738,71 +737,97 @@ class LogenApp:
         except Exception:
             pass
 
-        # ── 운송장출력 클릭 (이 시점에 운송장번호가 할당됨) ─────
-        # 새 창이 열릴 수 있으므로 intercept 후 거기서 번호 추출
-        tracking_nos = []
+        # ── 모든 행 체크박스 선택 ────────────────────────────────
         try:
-            with page.context.expect_page(timeout=12000) as new_pg_info:
-                try:
-                    frame.click('text=3.운송장출력', timeout=5000)
-                except Exception:
-                    frame.click('text=운송장출력', timeout=5000)
-
-            new_pg = new_pg_info.value
-            new_pg.wait_for_load_state('domcontentloaded', timeout=15000)
-            frame.wait_for_timeout(2000)
-
-            # 새 창(인쇄 미리보기)에서 12자리 운송장번호 추출
-            tracking_nos = new_pg.evaluate("""
+            frame.evaluate("""
                 () => {
-                    const seen = new Set();
-                    const results = [];
-                    const add = v => { if (v && !seen.has(v)) { seen.add(v); results.push(v); } };
-                    const text = document.body.innerText || '';
-                    (text.match(/\\b\\d{12}\\b/g) || []).forEach(add);
-                    document.querySelectorAll('td, span, div').forEach(el => {
-                        const v = (el.innerText || '').trim();
-                        if (/^\\d{12}$/.test(v)) add(v);
+                    document.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                        if (!cb.checked) cb.click();
                     });
-                    document.querySelectorAll('input').forEach(el => {
-                        const v = (el.value || '').trim();
-                        if (/^\\d{12}$/.test(v)) add(v);
-                    });
-                    return results;
                 }
             """)
-            logging.info("운송장 출력창 운송장번호: %s", tracking_nos)
-            new_pg.close()
+            frame.wait_for_timeout(500)
+        except Exception:
+            pass
 
+        # ── 운송장출력 클릭 (dialog handler 활성 상태에서) ───────
+        # 다이얼로그(확인/예) 자동 수락 후 인쇄 진행
+        logging.info("운송장출력 클릭 시도")
+        try:
+            clicked = frame.evaluate("""
+                () => {
+                    const els = Array.from(document.querySelectorAll('a, button, input[type="button"], span'));
+                    const el = els.find(e => (e.innerText || e.value || e.textContent || '').includes('운송장출력'));
+                    if (el) { el.click(); return true; }
+                    return false;
+                }
+            """)
+            logging.info("운송장출력 JS 클릭: %s", clicked)
         except Exception as e:
-            logging.warning("운송장출력 새 창 없음 (%s) → 다이얼로그/인라인 처리", e)
+            logging.warning("운송장출력 JS 클릭 실패: %s", e)
             try:
-                page.click('text=확인', timeout=2000)
+                frame.click('text=운송장출력', timeout=5000)
             except Exception:
                 pass
 
-        # 새 창에서 못 찾으면: 출력 후 변환완료 탭 그리드에서 재시도
+        # 인쇄 처리 및 그리드 갱신 대기
+        frame.wait_for_timeout(12000)
+        page.remove_listener('dialog', _auto_accept)
+
+        # ── 엑셀저장으로 운송장번호 추출 (가장 신뢰성 높음) ──────
+        import tempfile as _tf
+        tracking_nos = []
+        dl_path = None
+        try:
+            dl_path = os.path.join(_tf.gettempdir(),
+                                   f'logen_result_{datetime.now():%Y%m%d_%H%M%S}.xlsx')
+            with page.expect_download(timeout=15000) as dl_info:
+                try:
+                    frame.click('text=엑셀저장', timeout=5000)
+                except Exception:
+                    page.click('text=엑셀저장', timeout=3000)
+            dl_info.value.save_as(dl_path)
+            logging.info("엑셀저장 다운로드: %s", dl_path)
+
+            import openpyxl as _opxl
+            wb2 = _opxl.load_workbook(dl_path)
+            for ws2 in wb2.worksheets:
+                for row in ws2.iter_rows():
+                    for cell in row:
+                        v = str(cell.value or '').strip()
+                        if re.match(r'^\d{10,13}$', v) and not re.match(r'^01[016789]\d{7,8}$', v):
+                            if v not in tracking_nos:
+                                tracking_nos.append(v)
+            logging.info("엑셀저장에서 운송장번호 후보: %s", tracking_nos)
+        except Exception as e:
+            logging.warning("엑셀저장 실패: %s", e)
+        finally:
+            if dl_path:
+                try:
+                    os.remove(dl_path)
+                except Exception:
+                    pass
+
+        # fallback: 변환완료 탭 그리드에서 JS로 읽기
         if not tracking_nos:
-            frame.wait_for_timeout(4000)
             tracking_nos = frame.evaluate("""
                 () => {
                     const seen = new Set();
                     const results = [];
-                    const add = v => { if (v && !seen.has(v)) { seen.add(v); results.push(v); } };
-                    const text = document.body.innerText || '';
-                    (text.match(/\\b\\d{12}\\b/g) || []).forEach(add);
-                    document.querySelectorAll('td').forEach(el => {
-                        const v = (el.innerText || '').trim();
-                        if (/^\\d{12}$/.test(v)) add(v);
-                    });
-                    document.querySelectorAll('input').forEach(el => {
-                        const v = (el.value || '').trim();
-                        if (/^\\d{12}$/.test(v)) add(v);
+                    const add = v => {
+                        if (v && !seen.has(v) && !/^01[016789]/.test(v)) {
+                            seen.add(v); results.push(v);
+                        }
+                    };
+                    (document.body.innerText.match(/\\b\\d{10,13}\\b/g) || []).forEach(add);
+                    document.querySelectorAll('td, input').forEach(el => {
+                        const v = (el.innerText || el.value || '').trim();
+                        if (/^\\d{10,13}$/.test(v)) add(v);
                     });
                     return results;
                 }
             """)
-            logging.info("변환완료 탭 재시도 운송장번호: %s", tracking_nos)
+            logging.info("그리드 fallback 운송장번호 후보: %s", tracking_nos)
 
         # 중복 제거 (순서 유지)
         seen = set()
