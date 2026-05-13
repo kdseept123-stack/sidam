@@ -4,11 +4,21 @@ from tkinter import ttk, filedialog, messagebox
 import json
 import os
 import threading
+import logging
 from datetime import datetime
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
 HISTORY_PATH = os.path.join(BASE_DIR, 'history.json')
+LOG_PATH = os.path.join(BASE_DIR, 'automation.log')
+
+logging.basicConfig(
+    filename=LOG_PATH,
+    level=logging.DEBUG,
+    format='%(asctime)s %(levelname)s %(message)s',
+    encoding='utf-8',
+    force=True,
+)
 
 LOGEN_MAX_PRODUCT_LEN = 30
 
@@ -375,8 +385,10 @@ class LogenApp:
         except Exception as e:
             import traceback
             detail = traceback.format_exc()
+            logging.error("자동화 오류: %s\n%s", e, detail)
             self.root.after(0, lambda: messagebox.showerror(
-                "자동화 오류", f"{e}\n\n{detail[-800:]}"))
+                "자동화 오류",
+                f"{e}\n\n상세 로그: {LOG_PATH}\n\n{detail[-600:]}"))
             self.root.after(0, lambda: self.start_btn.config(state='normal'))
             self._set_status(f"오류: {e}")
 
@@ -409,16 +421,21 @@ class LogenApp:
                     self.root.after(0, lambda: self.start_btn.config(state='normal'))
                     return
 
-                self._set_status("복수건 폼 열기 중... (최대 30초)")
+                self._set_status("복수건 폼 열기 중... (최대 60초)")
+                logging.info("복수건 폼 열기 시도")
                 frame = self._get_multi_order_frame(page)
+                logging.info("복수건 폼 로드 완료: %s", frame.url)
 
                 self._set_status(f"{total}건 엑셀 생성 중...")
                 tmp_path = self._generate_bulk_excel(group_list)
+                logging.info("임시 엑셀 생성: %s", tmp_path)
 
                 try:
                     self._set_status(f"{total}건 업로드 및 전송 중...")
+                    logging.info("업로드 및 서버전송 시작")
                     tracking_map = self._upload_and_submit_bulk(
                         frame, page, tmp_path, total)
+                    logging.info("tracking_map: %s", tracking_map)
                 finally:
                     try:
                         os.remove(tmp_path)
@@ -628,58 +645,81 @@ class LogenApp:
             pass
 
         # ── 파일 업로드 ──────────────────────────────────────────
-        # 파일열기 버튼이 숨겨진 file input을 트리거함
         uploaded = False
+        logging.info("파일 업로드 시도: %s", tmp_path)
         try:
-            with page.expect_file_chooser(timeout=5000) as fc_info:
-                frame.click('text=파일열기', timeout=5000)
+            with page.expect_file_chooser(timeout=6000) as fc_info:
+                frame.click('text=파일열기', timeout=6000)
             fc_info.value.set_files(tmp_path)
             uploaded = True
-        except Exception:
-            pass
+            logging.info("파일선택창 업로드 성공")
+        except Exception as e:
+            logging.warning("파일선택창 업로드 실패: %s", e)
 
         if not uploaded:
-            # fallback: hidden file input에 직접 주입
             try:
                 frame.locator('input[type="file"]').first.set_input_files(tmp_path)
                 uploaded = True
+                logging.info("hidden input 업로드 성공")
             except Exception as e:
-                raise Exception(f"파일 업로드 실패: {e}")
+                logging.error("hidden input 업로드 실패: %s", e)
+                # 스크린샷 저장
+                try:
+                    ss_path = os.path.join(BASE_DIR, 'error_screenshot.png')
+                    page.screenshot(path=ss_path)
+                    logging.info("스크린샷 저장: %s", ss_path)
+                except Exception:
+                    pass
+                raise Exception(f"파일 업로드 실패: {e}\n스크린샷: {BASE_DIR}\\error_screenshot.png")
 
         frame.wait_for_timeout(2000)
 
         # ── 엑셀검증 ─────────────────────────────────────────────
+        logging.info("엑셀검증 클릭")
         frame.click('text=엑셀검증', timeout=5000)
         frame.wait_for_timeout(3000)
 
         body = frame.inner_text('body')
-        # "불러온 파일 : N건 (정상-N건, 오류-N건)" 패턴으로 정확하게 파싱
+        logging.debug("검증 후 body(500자): %s", body[:500])
         chk_m = re.search(r'정상-(\d+)건, 오류-(\d+)건', body)
         ok_cnt  = int(chk_m.group(1)) if chk_m else 0
         err_cnt = int(chk_m.group(2)) if chk_m else 0
         self._set_status(f"검증 결과: 정상 {ok_cnt}건, 오류 {err_cnt}건")
+        logging.info("검증 결과: 정상=%d, 오류=%d", ok_cnt, err_cnt)
 
         if ok_cnt == 0:
-            raise Exception(f"엑셀 검증 실패: 정상 0건 / 오류 {err_cnt}건")
-
-        # ── 2.서버전송 ────────────────────────────────────────────
-        frame.click('text=서버전송', timeout=5000)
-        frame.wait_for_timeout(2000)
-
-        # 팝업 확인
-        for popup_text in ['확인', '예', 'OK']:
             try:
-                page.click(f'text={popup_text}', timeout=2000)
-                frame.wait_for_timeout(500)
-                break
+                ss_path = os.path.join(BASE_DIR, 'error_screenshot.png')
+                page.screenshot(path=ss_path)
             except Exception:
                 pass
+            raise Exception(f"엑셀 검증 실패: 정상 0건 / 오류 {err_cnt}건\n스크린샷: {BASE_DIR}\\error_screenshot.png")
 
-        frame.wait_for_timeout(4000)
+        # ── 2.서버전송 ────────────────────────────────────────────
+        # 브라우저 다이얼로그(alert/confirm)를 자동 수락 — page.click('text=확인')은
+        # 페이지 내 다른 버튼을 눌러 이중 전송을 일으킬 수 있으므로 사용 금지
+        def _auto_accept(dialog):
+            logging.info("다이얼로그 자동수락: %s", dialog.message)
+            dialog.accept()
 
-        # ── 운송장번호 추출 ───────────────────────────────────────
-        # 서버전송 후 그리드에서 12자리 운송장번호를 순서대로 추출
+        page.on('dialog', _auto_accept)
+
+        logging.info("서버전송 클릭")
+        frame.click('text=서버전송', timeout=5000)
+
+        # 전송 처리 대기
+        frame.wait_for_timeout(6000)
+        page.remove_listener('dialog', _auto_accept)
+
+        # ── 변환완료 탭으로 전환 → 운송장번호 읽기 ──────────────
+        try:
+            frame.click('text=변환완료', timeout=3000)
+            frame.wait_for_timeout(2000)
+        except Exception:
+            pass
+
         result_text = frame.inner_text('body')
+        logging.debug("변환완료 body(2000자): %s", result_text[:2000])
         tracking_nos = re.findall(r'\b(\d{12})\b', result_text)
 
         # 중복 제거 (순서 유지)
