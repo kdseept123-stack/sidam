@@ -380,12 +380,16 @@ class LogenApp:
             self._set_status(f"오류: {e}")
 
     def _run_automation(self, targets):
+        import os, tempfile
         from playwright.sync_api import sync_playwright
 
+        # 묶음 그룹 구성 (순서 유지)
         groups = {}
         for o in targets:
             key = self._bundle_key(o)
             groups.setdefault(key, []).append(o)
+        group_list = list(groups.values())
+        total = len(group_list)
 
         success = 0
         fail = 0
@@ -400,40 +404,47 @@ class LogenApp:
                     self.root.after(0, lambda: messagebox.showerror(
                         "로그인 실패",
                         "logis.ilogen.com 로그인에 실패했습니다.\n\n"
-                        "⚙ 설정에서 아이디/비밀번호를 다시 확인해주세요.\n"
-                        "(www.ilogen.com 계정과 다를 수 있습니다)"))
+                        "⚙ 설정에서 아이디/비밀번호를 다시 확인해주세요."))
                     self.root.after(0, lambda: self.start_btn.config(state='normal'))
                     return
 
-                total = len(groups)
-                for idx, (key, order_group) in enumerate(groups.items(), 1):
-                    rep = order_group[0]
-                    name = rep.get('수취인명', '')
-                    self._set_status(f"[{idx}/{total}] {name} 처리 중...")
+                self._set_status("복수건 폼 열기 중... (최대 30초)")
+                frame = self._get_multi_order_frame(page)
 
+                self._set_status(f"{total}건 엑셀 생성 중...")
+                tmp_path = self._generate_bulk_excel(group_list)
+
+                try:
+                    self._set_status(f"{total}건 업로드 및 전송 중...")
+                    tracking_map = self._upload_and_submit_bulk(
+                        frame, page, tmp_path, total)
+                finally:
                     try:
-                        tracking_no = self._create_waybill(page, rep, order_group)
-                        if tracking_no:
-                            for o in order_group:
-                                o['_tracking'] = tracking_no
-                                o['_failed'] = False
-                                self.history[o.get('상품주문번호', '')] = {
-                                    'tracking_no': tracking_no,
-                                    'recipient': name,
-                                    'date': datetime.now().isoformat(),
-                                }
-                            success += 1
-                        else:
-                            for o in order_group:
-                                o['_failed'] = True
-                            fail += 1
-                    except Exception as e:
-                        for o in order_group:
+                        os.remove(tmp_path)
+                    except Exception:
+                        pass
+
+                # 결과를 orders에 반영
+                for i, group in enumerate(group_list):
+                    tracking_no = tracking_map.get(i)
+                    rep = group[0]
+                    name = rep.get('수취인명', '')
+                    if tracking_no:
+                        for o in group:
+                            o['_tracking'] = tracking_no
+                            o['_failed'] = False
+                            self.history[o.get('상품주문번호', '')] = {
+                                'tracking_no': tracking_no,
+                                'recipient': name,
+                                'date': datetime.now().isoformat(),
+                            }
+                        success += 1
+                    else:
+                        for o in group:
                             o['_failed'] = True
                         fail += 1
-                        self._set_status(f"오류 ({name}): {str(e)[:60]}")
 
-                    self.root.after(0, lambda v=success+fail: self.progress.config(value=v))
+                self.root.after(0, lambda v=total: self.progress.config(value=v))
 
             finally:
                 browser.close()
@@ -461,99 +472,242 @@ class LogenApp:
         page.locator('[id="user.pw"]').press('Enter')
         page.wait_for_timeout(3000)
 
-        # 로그인 실패 시 에러 텍스트 출현
+        # 팝업 닫기
+        for close_text in ['닫기', '확인']:
+            try:
+                page.click(f'text={close_text}', timeout=2000)
+                page.wait_for_timeout(500)
+            except Exception:
+                pass
+
         body = page.inner_text('body')
         if 'NoSuchUser' in body or '사용자 계정이 없습니다' in body:
             return False
         return True
 
-    def _create_waybill(self, page, rep_order, all_orders):
-        """
-        Create one Logen waybill for rep_order and return the tracking number.
-        Multiple orders in all_orders share the same waybill (bundled shipment).
-        """
-        page.goto('https://www.ilogen.com/web/personal/waybill/writeOnline',
-                  wait_until='networkidle')
+    def _get_multi_order_frame(self, page):
+        """복수건 메뉴를 열고 iframe 반환. 이미 열려 있으면 재사용."""
+        # 이미 iframe이 있으면 바로 반환
+        for f in page.frames:
+            if 'lrm01f0040' in f.url:
+                return f
 
+        # 메뉴 검색창에 '복수건' 입력 → 링크 활성화
+        try:
+            page.fill('#menuInput', '복수건', timeout=3000)
+            page.wait_for_timeout(1500)
+        except Exception:
+            pass
+
+        # JS 클릭 (최상위 및 모든 프레임에서 시도)
+        def _click_multi_menu():
+            page.evaluate("""
+                () => {
+                    const el = document.querySelector('a[title="주문등록/출력(복수건)"]');
+                    if (el) el.click();
+                }
+            """)
+            for f in page.frames:
+                try:
+                    found = f.evaluate("""
+                        () => {
+                            const el = document.querySelector('a[title="주문등록/출력(복수건)"]');
+                            if (el) { el.click(); return true; }
+                            return false;
+                        }
+                    """)
+                    if found:
+                        break
+                except Exception:
+                    pass
+
+        _click_multi_menu()
+
+        # iframe 로드 대기 (최대 45초, 10초마다 재클릭)
+        for attempt in range(45):
+            for f in page.frames:
+                if 'lrm01f0040' in f.url:
+                    f.wait_for_load_state('domcontentloaded')
+                    page.wait_for_timeout(1000)
+                    return f
+            if attempt in (10, 20, 30):
+                _click_multi_menu()
+            page.wait_for_timeout(1000)
+
+        raise Exception("복수건 주문등록 폼 iframe을 찾을 수 없습니다. (45초 초과)")
+
+    def _generate_bulk_excel(self, group_list):
+        """A타입(제목없음) 형식의 임시 Excel 파일 생성. group_list 순서대로 행 추가."""
+        import tempfile
+        import openpyxl
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+
+        for group in group_list:
+            rep = group[0]
+
+            # 주소 (배송주소 전체)
+            addr = rep.get('배송주소', '')
+
+            # 물품명 (묶음 시 합산)
+            names = list({o.get('상품명', '') for o in group if o.get('상품명')})
+            product_text = ', '.join(names)
+            if len(product_text) > LOGEN_MAX_PRODUCT_LEN:
+                product_text = product_text[:LOGEN_MAX_PRODUCT_LEN - 2] + '..'
+
+            # 수량 합산
+            try:
+                total_qty = sum(int(o.get('수량', 1) or 1) for o in group)
+            except Exception:
+                total_qty = 1
+
+            # A타입 컬럼(제목없음):
+            # 수하인명, 우편번호, 수하인주소, 수하인전화번호, 수하인핸드폰번호,
+            # 택배수량, 택배운임, 운임구분, 품목명, (공란), 배송메세지
+            ws.append([
+                rep.get('수취인명', ''),
+                rep.get('우편번호', ''),
+                addr,
+                '',                              # 집전화 (공란)
+                rep.get('수취인전화번호', ''),
+                total_qty,
+                '',                              # 택배운임 (공란 → 계약운임 자동)
+                '010',                           # 운임구분: 선불
+                product_text,
+                '',                              # (공란)
+                rep.get('배송메세지', '')[:40],
+            ])
+
+        tmp = tempfile.NamedTemporaryFile(
+            suffix='.xlsx', delete=False, dir=tempfile.gettempdir())
+        tmp.close()
+        wb.save(tmp.name)
+        return tmp.name
+
+    def _upload_and_submit_bulk(self, frame, page, tmp_path, total):
+        """복수건 폼: Excel 업로드 → 검증 → 서버전송 → 운송장번호 리스트 반환."""
+        import re
         cfg = self.config
 
-        # ── Sender ─────────────────────────────────────────
-        page.fill('input[name="sndName"], #sndName', cfg['sender_name'])
-        page.fill('input[name="sndTel"], #sndTel', cfg['sender_phone'])
+        # 접수일자 (오늘)
+        today = datetime.now().strftime('%Y-%m-%d')
+        try:
+            frame.fill('#takeDate', today, timeout=3000)
+        except Exception:
+            pass
 
-        # Zip code (may open popup or inline input)
-        page.fill('input[name="sndZipCode"], #sndZipCode', cfg['sender_zipcode'])
-        page.fill('input[name="sndAddr"], #sndAddr, input[name="sndAddr1"]',
-                  cfg['sender_address'])
+        # 송하인명
+        try:
+            frame.fill('#sndCustNm', cfg.get('sender_name', ''), timeout=3000)
+        except Exception:
+            pass
 
-        # ── Recipient ──────────────────────────────────────
-        page.fill('input[name="rcvName"], #rcvName', rep_order.get('수취인명', ''))
-        page.fill('input[name="rcvTel"], #rcvTel', rep_order.get('수취인전화번호', ''))
-        page.fill('input[name="rcvZipCode"], #rcvZipCode', rep_order.get('우편번호', ''))
-        page.fill('input[name="rcvAddr"], #rcvAddr, input[name="rcvAddr1"]',
-                  rep_order.get('배송주소', ''))
-
-        # ── Product ────────────────────────────────────────
-        names = list({o.get('상품명', '') for o in all_orders if o.get('상품명')})
-        product_text = ', '.join(names)
-        if len(product_text) > LOGEN_MAX_PRODUCT_LEN:
-            product_text = product_text[:LOGEN_MAX_PRODUCT_LEN - 2] + '..'
-
-        page.fill('input[name="itemName"], #itemName, input[name="goods"]', product_text)
-
-        # Delivery message
-        msg = rep_order.get('배송메세지', '')
-        if msg:
+        # 송하인 휴대폰 3분할 (010-xxxx-xxxx)
+        phone_raw = re.sub(r'\D', '', cfg.get('sender_phone', ''))
+        if len(phone_raw) == 11:
             try:
-                page.fill('input[name="remark"], textarea[name="remark"], #remark', msg)
+                frame.fill('#cellNo1', phone_raw[:3])
+                frame.fill('#cellNo2', phone_raw[3:7])
+                frame.fill('#cellNo3', phone_raw[7:])
             except Exception:
                 pass
 
-        # ── Submit ─────────────────────────────────────────
-        page.click('button[type="submit"], .btn_submit, .btn-submit, input[type="submit"]')
-        page.wait_for_load_state('networkidle')
+        # Excel 타입: A타입 (value='100')
+        try:
+            frame.select_option('#cbExcelTy', value='100', timeout=3000)
+            frame.wait_for_timeout(500)
+        except Exception:
+            pass
 
-        # ── Extract tracking number ────────────────────────
-        tracking_no = self._extract_tracking_no(page)
+        # 합포장안함 (우리가 이미 묶음 처리함)
+        try:
+            frame.select_option('#cbMrgPackStandard', value='0', timeout=2000)
+        except Exception:
+            pass
 
-        # ── Print ──────────────────────────────────────────
-        if tracking_no:
+        # ── 파일 업로드 ──────────────────────────────────────────
+        # 파일열기 버튼이 숨겨진 file input을 트리거함
+        uploaded = False
+        try:
+            with page.expect_file_chooser(timeout=5000) as fc_info:
+                frame.click('text=파일열기', timeout=5000)
+            fc_info.value.set_files(tmp_path)
+            uploaded = True
+        except Exception:
+            pass
+
+        if not uploaded:
+            # fallback: hidden file input에 직접 주입
             try:
-                page.click('.btn_print, .btn-print, button:has-text("인쇄"), a:has-text("인쇄")')
-                page.wait_for_timeout(2000)
+                frame.locator('input[type="file"]').first.set_input_files(tmp_path)
+                uploaded = True
+            except Exception as e:
+                raise Exception(f"파일 업로드 실패: {e}")
+
+        frame.wait_for_timeout(2000)
+
+        # ── 엑셀검증 ─────────────────────────────────────────────
+        frame.click('text=엑셀검증', timeout=5000)
+        frame.wait_for_timeout(3000)
+
+        body = frame.inner_text('body')
+        # "불러온 파일 : N건 (정상-N건, 오류-N건)" 패턴으로 정확하게 파싱
+        chk_m = re.search(r'정상-(\d+)건, 오류-(\d+)건', body)
+        ok_cnt  = int(chk_m.group(1)) if chk_m else 0
+        err_cnt = int(chk_m.group(2)) if chk_m else 0
+        self._set_status(f"검증 결과: 정상 {ok_cnt}건, 오류 {err_cnt}건")
+
+        if ok_cnt == 0:
+            raise Exception(f"엑셀 검증 실패: 정상 0건 / 오류 {err_cnt}건")
+
+        # ── 2.서버전송 ────────────────────────────────────────────
+        frame.click('text=서버전송', timeout=5000)
+        frame.wait_for_timeout(2000)
+
+        # 팝업 확인
+        for popup_text in ['확인', '예', 'OK']:
+            try:
+                page.click(f'text={popup_text}', timeout=2000)
+                frame.wait_for_timeout(500)
+                break
             except Exception:
                 pass
 
-        return tracking_no
+        frame.wait_for_timeout(4000)
 
-    def _extract_tracking_no(self, page):
-        """Try several common patterns to find the tracking number on the result page."""
-        import re
-        patterns = [
-            r'\d{10,13}',  # typical tracking number: 10-13 digits
-        ]
-        selectors = [
-            '.invoice_num', '.waybillNo', '#waybillNo', '.tracking-number',
-            'td:has-text("운송장")', '.result_num', 'span.num',
-        ]
-        for sel in selectors:
-            try:
-                el = page.locator(sel).first
-                text = el.inner_text(timeout=2000)
-                for pat in patterns:
-                    m = re.search(pat, text)
-                    if m:
-                        return m.group()
-            except Exception:
-                pass
+        # ── 운송장번호 추출 ───────────────────────────────────────
+        # 서버전송 후 그리드에서 12자리 운송장번호를 순서대로 추출
+        result_text = frame.inner_text('body')
+        tracking_nos = re.findall(r'\b(\d{12})\b', result_text)
 
-        # Fallback: scan all text on page
-        body = page.inner_text('body')
-        m = re.search(r'운송장\s*번호[^\d]*(\d{10,13})', body)
-        if m:
-            return m.group(1)
+        # 중복 제거 (순서 유지)
+        seen = set()
+        unique_nos = []
+        for t in tracking_nos:
+            if t not in seen:
+                seen.add(t)
+                unique_nos.append(t)
 
-        return None
+        # index → tracking_no 매핑
+        tracking_map = {i: unique_nos[i] for i in range(min(total, len(unique_nos)))}
+
+        self._set_status(f"운송장번호 {len(unique_nos)}건 확인됨")
+
+        # ── 운송장 출력 ──────────────────────────────────────────
+        try:
+            frame.click('text=운송장출력', timeout=5000)
+            frame.wait_for_timeout(3000)
+            for popup_text in ['확인', '예', 'OK']:
+                try:
+                    page.click(f'text={popup_text}', timeout=2000)
+                    break
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        return tracking_map
 
     def retry_failed(self):
         for o in self.orders:
