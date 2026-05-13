@@ -199,6 +199,7 @@ class LogenApp:
                 UpdateLinks=0,
                 ReadOnly=True,
                 IgnoreReadOnlyRecommended=True,
+                Password='1111',
             )
             ws = wb.ActiveSheet
             rows = ws.UsedRange.Rows.Count
@@ -492,49 +493,49 @@ class LogenApp:
             if 'lrm01f0040' in f.url:
                 return f
 
-        # 메뉴 검색창에 '복수건' 입력 → 링크 활성화
+        # 메뉴 검색창에 '복수건' 입력 (AJAX 검색 결과가 최상위 DOM에 렌더링됨)
         try:
             page.fill('#menuInput', '복수건', timeout=3000)
-            page.wait_for_timeout(1500)
         except Exception:
             pass
 
-        # JS 클릭 (최상위 및 모든 프레임에서 시도)
-        def _click_multi_menu():
-            page.evaluate("""
-                () => {
-                    const el = document.querySelector('a[title="주문등록/출력(복수건)"]');
-                    if (el) el.click();
-                }
-            """)
+        # 검색 결과 렌더링 대기 후 매초 클릭 시도 (최대 60초)
+        # - 처음 2~3초는 AJAX 결과가 아직 없어서 클릭 무시됨
+        # - 검색 결과가 뜨면 page.evaluate가 링크를 찾아 폼 열림
+        JS_CLICK = """
+            () => {
+                const el = document.querySelector('a[title="주문등록/출력(복수건)"]');
+                if (el) { el.click(); return true; }
+                return false;
+            }
+        """
+        for attempt in range(60):
+            # 최상위 document (검색 결과 포함) 에서 클릭
+            try:
+                page.evaluate(JS_CLICK)
+            except Exception:
+                pass
+            # 모든 frame 에서도 시도
             for f in page.frames:
                 try:
-                    found = f.evaluate("""
-                        () => {
-                            const el = document.querySelector('a[title="주문등록/출력(복수건)"]');
-                            if (el) { el.click(); return true; }
-                            return false;
-                        }
-                    """)
-                    if found:
-                        break
+                    f.evaluate(JS_CLICK)
                 except Exception:
                     pass
 
-        _click_multi_menu()
+            page.wait_for_timeout(1000)
 
-        # iframe 로드 대기 (최대 45초, 10초마다 재클릭)
-        for attempt in range(45):
+            # 폼 로드 확인
             for f in page.frames:
                 if 'lrm01f0040' in f.url:
+                    self._set_status("복수건 폼 로드 완료")
                     f.wait_for_load_state('domcontentloaded')
                     page.wait_for_timeout(1000)
                     return f
-            if attempt in (10, 20, 30):
-                _click_multi_menu()
-            page.wait_for_timeout(1000)
 
-        raise Exception("복수건 주문등록 폼 iframe을 찾을 수 없습니다. (45초 초과)")
+            if attempt % 5 == 0:
+                self._set_status(f"복수건 폼 대기 중... {attempt}초 경과")
+
+        raise Exception("복수건 주문등록 폼 iframe을 찾을 수 없습니다. (60초 초과)\n메뉴에서 '주문등록/출력(복수건)' 권한이 있는지 확인하세요.")
 
     def _generate_bulk_excel(self, group_list):
         """A타입(제목없음) 형식의 임시 Excel 파일 생성. group_list 순서대로 행 추가."""
