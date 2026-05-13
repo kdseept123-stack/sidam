@@ -917,12 +917,14 @@ class LogenApp:
 <script>window.onload = function(){{ window.print(); }};</script>
 </body></html>"""
 
-        import tempfile, webbrowser
+        import tempfile, subprocess
         tmp = tempfile.NamedTemporaryFile(
             suffix='.html', delete=False, mode='w', encoding='utf-8')
         tmp.write(html)
         tmp.close()
-        webbrowser.open(f'file:///{tmp.name.replace(chr(92), "/")}')
+        url = 'file:///' + tmp.name.replace('\\', '/')
+        # 파일 연결 프로그램(메모장 등)이 아닌 기본 브라우저로 강제 오픈
+        subprocess.Popen(['rundll32', 'url.dll,FileProtocolHandler', url])
 
     def save_smartstore_excel(self):
         done = [o for o in self.orders if o['_tracking']]
