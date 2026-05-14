@@ -1055,22 +1055,25 @@ class LogenApp:
             return None
         try:
             import openpyxl
+            from datetime import timedelta
+            tomorrow = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
             desktop = os.path.join(os.path.expanduser('~'), 'Desktop')
             filename = f"송장등록_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
             path = os.path.join(desktop, filename)
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "송장번호"
-            ws.append(['상품주문번호', '배송방법', '택배사', '송장번호'])
+            ws.append(['상품주문번호', '배송방법', '택배사', '송장번호', '발송일'])
             for o in done:
                 ws.append([
                     o.get('상품주문번호', ''),
                     '택배',
                     '로젠택배',
                     o['_tracking'],
+                    tomorrow,
                 ])
             wb.save(path)
-            logging.info("스마트스토어 엑셀 자동저장: %s", path)
+            logging.info("스마트스토어 엑셀 자동저장: %s (발송일=%s)", path, tomorrow)
             return path
         except Exception as e:
             logging.warning("스마트스토어 엑셀 자동저장 실패: %s", e)
@@ -1092,10 +1095,12 @@ class LogenApp:
 
         try:
             import openpyxl
+            from datetime import timedelta
+            tomorrow = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "송장번호"
-            ws.append(['상품주문번호', '배송방법', '택배사', '송장번호'])
+            ws.append(['상품주문번호', '배송방법', '택배사', '송장번호', '발송일'])
 
             for o in done:
                 ws.append([
@@ -1103,6 +1108,7 @@ class LogenApp:
                     '택배',
                     '로젠택배',
                     o['_tracking'],
+                    tomorrow,
                 ])
 
             wb.save(path)
