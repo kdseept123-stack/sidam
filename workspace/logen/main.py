@@ -486,9 +486,11 @@ class LogenApp:
         success = 0
         fail = 0
 
+        desktop = os.path.join(os.path.expanduser('~'), 'Desktop')
+
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=False, slow_mo=300)
-            context = browser.new_context()
+            context = browser.new_context(accept_downloads=True)
             page = context.new_page()
 
             try:
@@ -543,37 +545,41 @@ class LogenApp:
 
                 self.root.after(0, lambda v=total: self.progress.config(value=v))
 
-                # 인쇄 확인 후 닫기 (브라우저 유지)
-                _close_evt = threading.Event()
-                self.root.after(0, lambda e=_close_evt: (
-                    messagebox.showinfo("인쇄 확인", "인쇄를 확인하셨으면 확인을 눌러주세요.\n확인 후 로젠 화면이 닫힙니다."),
-                    e.set()
-                ))
-                _close_evt.wait(timeout=300)
+                self._save_json(HISTORY_PATH, self.history)
+
+                # 성공 건이 있으면 바탕화면에 엑셀 저장
+                auto_saved_path = None
+                if success > 0:
+                    auto_saved_path = self._auto_save_smartstore_excel()
+
+                self.root.after(0, self._refresh_table)
+                self.root.after(0, lambda: self.start_btn.config(state='normal'))
+                self.root.after(0, lambda: self.retry_btn.config(
+                    state='normal' if fail > 0 else 'disabled'))
+                self.root.after(0, lambda: self.save_btn.config(state='normal'))
+
+                msg = f"완료: {success}건 성공"
+                if fail:
+                    msg += f", {fail}건 실패"
+                if auto_saved_path:
+                    msg += f"\n\n📊 스마트스토어 엑셀:\n{auto_saved_path}"
+                self._set_status(msg)
+                self.root.after(0, lambda: messagebox.showinfo("발송 완료", msg))
+
+                # 사용자가 직접 닫을 때까지 브라우저 유지
+                self._set_status(msg + "\n\n로젠 창 확인 후 직접 닫아주세요.")
+                while True:
+                    try:
+                        page.wait_for_timeout(1000)
+                        page.evaluate("() => document.title")
+                    except Exception:
+                        break  # 브라우저가 닫히면 종료
 
             finally:
-                browser.close()
-
-        self._save_json(HISTORY_PATH, self.history)
-
-        # 성공 건이 있으면 자동으로 바탕화면에 엑셀 저장
-        auto_saved_path = None
-        if success > 0:
-            auto_saved_path = self._auto_save_smartstore_excel()
-
-        self.root.after(0, self._refresh_table)
-        self.root.after(0, lambda: self.start_btn.config(state='normal'))
-        self.root.after(0, lambda: self.retry_btn.config(
-            state='normal' if fail > 0 else 'disabled'))
-        self.root.after(0, lambda: self.save_btn.config(state='normal'))
-
-        msg = f"완료: {success}건 성공"
-        if fail:
-            msg += f", {fail}건 실패 → '실패 재시도' 버튼으로 재처리 가능"
-        if auto_saved_path:
-            msg += f"\n\n📊 스마트스토어 엑셀 저장됨:\n{auto_saved_path}"
-        self._set_status(msg)
-        self.root.after(0, lambda: messagebox.showinfo("발송 완료", msg))
+                try:
+                    browser.close()
+                except Exception:
+                    pass
 
     def _logen_login(self, page):
         """Login to logis.ilogen.com. Returns True on success."""
@@ -825,122 +831,118 @@ class LogenApp:
         except Exception:
             pass
 
-        # ── 1. 운송장출력 먼저 (출력 후에 운송장번호 생성됨) ─────────────────
-        logging.info("운송장출력 클릭 시도")
-        try:
-            clicked = frame.evaluate("""
-                () => {
-                    const els = Array.from(document.querySelectorAll('a, button, input[type="button"], span'));
-                    const el = els.find(e => (e.innerText || e.value || e.textContent || '').includes('운송장출력'));
-                    if (el) { el.click(); return true; }
-                    return false;
-                }
-            """)
-            logging.info("운송장출력 JS 클릭: %s", clicked)
-        except Exception as e:
-            logging.warning("운송장출력 JS 클릭 실패: %s", e)
-            try:
-                frame.click('text=운송장출력', timeout=5000)
-            except Exception:
-                pass
-
-        # 인쇄창 처리 및 운송장번호 생성 대기 (변환완료 탭 재클릭 금지 — 미출력으로 리셋됨)
-        frame.wait_for_timeout(15000)
         page.remove_listener('dialog', _auto_accept)
 
-        # ── 2. 인쇄 후 현재 상태(출력완료)에서 바로 엑셀저장 ────────────────
+        # 운송장번호가 그리드에 생길 때까지 최대 60초 대기
+        logging.info("운송장번호 생성 대기 중...")
+        for _ in range(60):
+            page.wait_for_timeout(1000)
+            live_frame = next((f for f in page.frames if 'lrm01f0040' in f.url), None)
+            if live_frame is None:
+                continue
+            try:
+                nums = live_frame.evaluate("""
+                    () => (document.body.innerText.match(/\\b\\d{10,13}\\b/g) || [])
+                          .filter(v => !/^01[016789]/.test(v))
+                """)
+                if nums:
+                    logging.info("운송장번호 감지됨: %s", nums[:3])
+                    frame = live_frame
+                    break
+            except Exception:
+                pass
+        else:
+            logging.warning("60초 내 운송장번호 미감지")
 
-        # ── 3. 엑셀저장으로 운송장번호 추출 ─────────────────────────────────
-        import tempfile as _tf
+        # ── 엑셀저장 반복 시도 (운송장번호가 채워질 때까지 최대 5회 × 20초) ──────
+        import openpyxl as _opxl, glob as _glob, time as _time, shutil as _shutil
         tracking_nos = []
-        dl_path = None
-        try:
-            dl_path = os.path.join(_tf.gettempdir(),
-                                   f'logen_result_{datetime.now():%Y%m%d_%H%M%S}.xlsx')
-            with page.expect_download(timeout=15000) as dl_info:
+        dl_path = os.path.join(os.path.expanduser('~'), 'Desktop', '로젠_송장결과_최신.xlsx')
+        downloads_dir = os.path.join(os.path.expanduser('~'), 'Downloads')
+
+        JS_EXCEL = """
+            () => {
+                const el = Array.from(document.querySelectorAll('a,button,input,span'))
+                    .find(e => (e.innerText||e.value||e.textContent||'').trim() === '엑셀저장');
+                if (el) { el.click(); return true; }
+                return false;
+            }
+        """
+
+        def _try_excel_save():
+            """엑셀저장 클릭 → 파일 대기 → 운송장번호 추출. 찾으면 리스트 반환, 없으면 []."""
+            cur_frame = next((f for f in page.frames if 'lrm01f0040' in f.url), None)
+            before_dl = set(_glob.glob(os.path.join(downloads_dir, '*.xlsx')))
+            before_dt = set(_glob.glob(os.path.join(os.path.expanduser('~'), 'Desktop', '*.xlsx')))
+
+            for target in ([cur_frame] if cur_frame else []) + [page]:
                 try:
-                    frame.click('text=엑셀저장', timeout=8000)
-                except Exception:
-                    page.click('text=엑셀저장', timeout=5000)
-            dl_info.value.save_as(dl_path)
-            logging.info("엑셀저장 다운로드: %s", dl_path)
-
-            import openpyxl as _opxl
-            wb2 = _opxl.load_workbook(dl_path)
-
-            for ws2 in wb2.worksheets:
-                # 1행=타이틀, 2행=컬럼헤더 구조 — 최대 5행에서 헤더 행 탐색
-                tracking_col = None
-                header_row = None
-                for row in ws2.iter_rows(max_row=5):
-                    for cell in row:
-                        v = str(cell.value or '').strip()
-                        if v == '운송장번호':
-                            tracking_col = cell.column
-                            header_row = cell.row
-                            logging.info("운송장번호 컬럼: row=%s col=%s", header_row, tracking_col)
-                            break
-                    if tracking_col:
+                    if target.evaluate(JS_EXCEL):
+                        logging.info("엑셀저장 JS 클릭 성공")
                         break
+                except Exception:
+                    pass
 
-                # 헤더 행 로그
-                if header_row:
-                    hdr = [str(c.value or '') for c in next(ws2.iter_rows(min_row=header_row, max_row=header_row))]
-                    logging.info("엑셀저장 헤더(%d행): %s", header_row, hdr)
+            new_file = None
+            for _ in range(15):
+                _time.sleep(1)
+                added = (set(_glob.glob(os.path.join(downloads_dir, '*.xlsx'))) - before_dl) | \
+                        (set(_glob.glob(os.path.join(os.path.expanduser('~'), 'Desktop', '*.xlsx'))) - before_dt)
+                if added:
+                    new_file = max(added, key=os.path.getmtime)
+                    break
 
-                if tracking_col and header_row:
-                    for row in ws2.iter_rows(min_row=header_row + 1):
-                        raw = row[tracking_col - 1].value
-                        if isinstance(raw, (int, float)) and raw == int(raw):
-                            v = str(int(raw))
-                        else:
-                            v = re.sub(r'[-\s]', '', str(raw or '').strip())
-                        if re.match(r'^\d{10,13}$', v) and not re.match(r'^01[016789]\d{7,8}$', v):
-                            if v not in tracking_nos:
-                                tracking_nos.append(v)
-                else:
-                    # 컬럼 못 찾으면 전체 스캔
-                    for row in ws2.iter_rows():
+            if not new_file:
+                return []
+
+            target_path = dl_path
+            try:
+                _shutil.move(new_file, target_path)
+            except Exception:
+                target_path = new_file
+
+            nos = []
+            try:
+                wb2 = _opxl.load_workbook(target_path)
+                for ws2 in wb2.worksheets:
+                    tracking_col = header_row = None
+                    for row in ws2.iter_rows(max_row=5):
                         for cell in row:
+                            if str(cell.value or '').strip() == '운송장번호':
+                                tracking_col = cell.column
+                                header_row = cell.row
+                                break
+                        if tracking_col:
+                            break
+                    logging.info("운송장번호 컬럼: row=%s col=%s", header_row, tracking_col)
+                    iter_rows = ws2.iter_rows(min_row=header_row + 1) if header_row else ws2.iter_rows()
+                    for row in iter_rows:
+                        cells = [row[tracking_col - 1]] if tracking_col else row
+                        for cell in cells:
                             raw = cell.value
                             if isinstance(raw, (int, float)) and raw == int(raw):
                                 v = str(int(raw))
                             else:
                                 v = re.sub(r'[-\s]', '', str(raw or '').strip())
                             if re.match(r'^\d{10,13}$', v) and not re.match(r'^01[016789]\d{7,8}$', v):
-                                if v not in tracking_nos:
-                                    tracking_nos.append(v)
+                                if v not in nos:
+                                    nos.append(v)
+            except Exception as e:
+                logging.warning("엑셀 읽기 실패: %s", e)
 
-            logging.info("엑셀저장에서 운송장번호 후보: %s", tracking_nos)
-        except Exception as e:
-            logging.warning("엑셀저장 실패: %s", e)
-        finally:
-            if dl_path:
-                try:
-                    os.remove(dl_path)
-                except Exception:
-                    pass
+            logging.info("엑셀저장 운송장번호: %s", nos)
+            return nos
 
-        # fallback: 그리드 JS 스캔
-        if not tracking_nos:
-            tracking_nos = frame.evaluate("""
-                () => {
-                    const seen = new Set();
-                    const results = [];
-                    const add = v => {
-                        if (v && !seen.has(v) && !/^01[016789]/.test(v)) {
-                            seen.add(v); results.push(v);
-                        }
-                    };
-                    (document.body.innerText.match(/\\b\\d{10,13}\\b/g) || []).forEach(add);
-                    document.querySelectorAll('td, input').forEach(el => {
-                        const v = (el.innerText || el.value || '').trim();
-                        if (/^\\d{10,13}$/.test(v)) add(v);
-                    });
-                    return results;
-                }
-            """)
-            logging.info("그리드 fallback 운송장번호 후보: %s", tracking_nos)
+        # 최대 5회 시도, 20초 간격
+        for attempt in range(5):
+            self._set_status(f"운송장번호 확인 중... ({attempt + 1}/5회)")
+            tracking_nos = _try_excel_save()
+            if tracking_nos:
+                logging.info("운송장번호 확보 (시도 %d회): %s", attempt + 1, tracking_nos)
+                break
+            if attempt < 4:
+                logging.info("운송장번호 없음, 20초 후 재시도...")
+                page.wait_for_timeout(20000)
 
         # 중복 제거 (순서 유지)
         seen = set()
@@ -1058,8 +1060,7 @@ class LogenApp:
             from datetime import timedelta
             tomorrow = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
             desktop = os.path.join(os.path.expanduser('~'), 'Desktop')
-            filename = f"송장등록_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
-            path = os.path.join(desktop, filename)
+            path = os.path.join(desktop, '송장등록_최신.xlsx')
             wb = openpyxl.Workbook()
             ws = wb.active
             ws.title = "송장번호"
@@ -1089,7 +1090,7 @@ class LogenApp:
             title="스마트스토어 송장 업로드 엑셀 저장",
             defaultextension=".xlsx",
             filetypes=[("Excel", "*.xlsx")],
-            initialfile=f"송장등록_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx")
+            initialfile='송장등록_최신.xlsx')
         if not path:
             return
 
