@@ -128,6 +128,7 @@ class LogenApp:
         tbl_frame.rowconfigure(0, weight=1)
 
         self.tree.bind('<Button-1>', self._on_row_click)
+        self.tree.bind('<Double-Button-1>', self._on_row_double_click)
         self.tree.tag_configure('done',   background='#E8F5E9')
         self.tree.tag_configure('bundle', background='#E3F2FD')
         self.tree.tag_configure('fail',   background='#FFEBEE')
@@ -354,7 +355,12 @@ class LogenApp:
         return m
 
     def _bundle_key(self, order):
-        return (order.get('수취인명', ''), order.get('수취인전화번호', ''))
+        # 수취인연락처 컬럼이 주문마다 달라 신뢰 불가 → 이름+우편번호+주소로 묶음
+        return (
+            order.get('수취인명', ''),
+            order.get('우편번호', ''),
+            order.get('배송주소', '')[:30],
+        )
 
     def _on_row_click(self, event):
         col = self.tree.identify_column(event.x)
@@ -368,6 +374,53 @@ class LogenApp:
             selected = sum(1 for o in self.orders if o['_selected'])
             self.count_label.config(
                 text=f"선택: {selected}건 / 전체: {len(self.orders)}건")
+
+    def _on_row_double_click(self, event):
+        row = self.tree.identify_row(event.y)
+        if not row:
+            return
+        idx = int(row)
+        o = self.orders[idx]
+
+        win = tk.Toplevel(self.root)
+        win.title("송장번호 입력")
+        win.geometry("380x140")
+        win.resizable(False, False)
+        win.grab_set()
+
+        tk.Label(win, text=f"수취인: {o.get('수취인명', '')}  |  {o.get('상품명', '')[:30]}",
+                 font=('맑은 고딕', 10)).pack(pady=(14, 4), padx=16, anchor='w')
+        tk.Label(win, text="운송장번호:", font=('맑은 고딕', 10)).pack(anchor='w', padx=16)
+
+        entry = tk.Entry(win, font=('맑은 고딕', 13), width=22)
+        entry.insert(0, o.get('_tracking', ''))
+        entry.pack(padx=16, pady=6, fill='x')
+        entry.focus_set()
+        entry.select_range(0, 'end')
+
+        def save():
+            tracking_no = entry.get().strip()
+            if not tracking_no:
+                return
+            # 묶음배송이면 같은 그룹 전체에 동일 송장번호 적용
+            bundle_map = self._build_bundle_map()
+            key = self._bundle_key(o)
+            for sibling in bundle_map.get(key, [o]):
+                sibling['_tracking'] = tracking_no
+                sibling['_failed'] = False
+                self.history[sibling.get('상품주문번호', '')] = {
+                    'tracking_no': tracking_no,
+                    'recipient': o.get('수취인명', ''),
+                    'date': datetime.now().isoformat(),
+                }
+            self._save_json(HISTORY_PATH, self.history)
+            self._refresh_table()
+            self.save_btn.config(state='normal')
+            win.destroy()
+
+        tk.Button(win, text="저장", command=save,
+                  font=('맑은 고딕', 11), width=10).pack(pady=4)
+        win.bind('<Return>', lambda e: save())
 
     def _toggle_all(self):
         state = self.all_var.get()
@@ -490,10 +543,24 @@ class LogenApp:
 
                 self.root.after(0, lambda v=total: self.progress.config(value=v))
 
+                # 인쇄 확인 후 닫기 (브라우저 유지)
+                _close_evt = threading.Event()
+                self.root.after(0, lambda e=_close_evt: (
+                    messagebox.showinfo("인쇄 확인", "인쇄를 확인하셨으면 확인을 눌러주세요.\n확인 후 로젠 화면이 닫힙니다."),
+                    e.set()
+                ))
+                _close_evt.wait(timeout=300)
+
             finally:
                 browser.close()
 
         self._save_json(HISTORY_PATH, self.history)
+
+        # 성공 건이 있으면 자동으로 바탕화면에 엑셀 저장
+        auto_saved_path = None
+        if success > 0:
+            auto_saved_path = self._auto_save_smartstore_excel()
+
         self.root.after(0, self._refresh_table)
         self.root.after(0, lambda: self.start_btn.config(state='normal'))
         self.root.after(0, lambda: self.retry_btn.config(
@@ -503,6 +570,8 @@ class LogenApp:
         msg = f"완료: {success}건 성공"
         if fail:
             msg += f", {fail}건 실패 → '실패 재시도' 버튼으로 재처리 가능"
+        if auto_saved_path:
+            msg += f"\n\n📊 스마트스토어 엑셀 저장됨:\n{auto_saved_path}"
         self._set_status(msg)
         self.root.after(0, lambda: messagebox.showinfo("발송 완료", msg))
 
@@ -756,8 +825,7 @@ class LogenApp:
         except Exception:
             pass
 
-        # ── 운송장출력 클릭 (dialog handler 활성 상태에서) ───────
-        # 다이얼로그(확인/예) 자동 수락 후 인쇄 진행
+        # ── 1. 운송장출력 먼저 (출력 후에 운송장번호 생성됨) ─────────────────
         logging.info("운송장출력 클릭 시도")
         try:
             clicked = frame.evaluate("""
@@ -776,11 +844,13 @@ class LogenApp:
             except Exception:
                 pass
 
-        # 인쇄 처리 및 그리드 갱신 대기
-        frame.wait_for_timeout(12000)
+        # 인쇄창 처리 및 운송장번호 생성 대기 (변환완료 탭 재클릭 금지 — 미출력으로 리셋됨)
+        frame.wait_for_timeout(15000)
         page.remove_listener('dialog', _auto_accept)
 
-        # ── 엑셀저장으로 운송장번호 추출 (가장 신뢰성 높음) ──────
+        # ── 2. 인쇄 후 현재 상태(출력완료)에서 바로 엑셀저장 ────────────────
+
+        # ── 3. 엑셀저장으로 운송장번호 추출 ─────────────────────────────────
         import tempfile as _tf
         tracking_nos = []
         dl_path = None
@@ -789,21 +859,58 @@ class LogenApp:
                                    f'logen_result_{datetime.now():%Y%m%d_%H%M%S}.xlsx')
             with page.expect_download(timeout=15000) as dl_info:
                 try:
-                    frame.click('text=엑셀저장', timeout=5000)
+                    frame.click('text=엑셀저장', timeout=8000)
                 except Exception:
-                    page.click('text=엑셀저장', timeout=3000)
+                    page.click('text=엑셀저장', timeout=5000)
             dl_info.value.save_as(dl_path)
             logging.info("엑셀저장 다운로드: %s", dl_path)
 
             import openpyxl as _opxl
             wb2 = _opxl.load_workbook(dl_path)
+
             for ws2 in wb2.worksheets:
-                for row in ws2.iter_rows():
+                # 1행=타이틀, 2행=컬럼헤더 구조 — 최대 5행에서 헤더 행 탐색
+                tracking_col = None
+                header_row = None
+                for row in ws2.iter_rows(max_row=5):
                     for cell in row:
                         v = str(cell.value or '').strip()
+                        if v == '운송장번호':
+                            tracking_col = cell.column
+                            header_row = cell.row
+                            logging.info("운송장번호 컬럼: row=%s col=%s", header_row, tracking_col)
+                            break
+                    if tracking_col:
+                        break
+
+                # 헤더 행 로그
+                if header_row:
+                    hdr = [str(c.value or '') for c in next(ws2.iter_rows(min_row=header_row, max_row=header_row))]
+                    logging.info("엑셀저장 헤더(%d행): %s", header_row, hdr)
+
+                if tracking_col and header_row:
+                    for row in ws2.iter_rows(min_row=header_row + 1):
+                        raw = row[tracking_col - 1].value
+                        if isinstance(raw, (int, float)) and raw == int(raw):
+                            v = str(int(raw))
+                        else:
+                            v = re.sub(r'[-\s]', '', str(raw or '').strip())
                         if re.match(r'^\d{10,13}$', v) and not re.match(r'^01[016789]\d{7,8}$', v):
                             if v not in tracking_nos:
                                 tracking_nos.append(v)
+                else:
+                    # 컬럼 못 찾으면 전체 스캔
+                    for row in ws2.iter_rows():
+                        for cell in row:
+                            raw = cell.value
+                            if isinstance(raw, (int, float)) and raw == int(raw):
+                                v = str(int(raw))
+                            else:
+                                v = re.sub(r'[-\s]', '', str(raw or '').strip())
+                            if re.match(r'^\d{10,13}$', v) and not re.match(r'^01[016789]\d{7,8}$', v):
+                                if v not in tracking_nos:
+                                    tracking_nos.append(v)
+
             logging.info("엑셀저장에서 운송장번호 후보: %s", tracking_nos)
         except Exception as e:
             logging.warning("엑셀저장 실패: %s", e)
@@ -814,7 +921,7 @@ class LogenApp:
                 except Exception:
                     pass
 
-        # fallback: 변환완료 탭 그리드에서 JS로 읽기
+        # fallback: 그리드 JS 스캔
         if not tracking_nos:
             tracking_nos = frame.evaluate("""
                 () => {
@@ -940,6 +1047,34 @@ class LogenApp:
                 break
         if not opened:
             subprocess.Popen(['rundll32', 'url.dll,FileProtocolHandler', url])
+
+    def _auto_save_smartstore_excel(self):
+        """자동화 성공 후 바탕화면에 스마트스토어 업로드용 엑셀 자동 저장."""
+        done = [o for o in self.orders if o.get('_tracking')]
+        if not done:
+            return None
+        try:
+            import openpyxl
+            desktop = os.path.join(os.path.expanduser('~'), 'Desktop')
+            filename = f"송장등록_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+            path = os.path.join(desktop, filename)
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "송장번호"
+            ws.append(['상품주문번호', '배송방법', '택배사', '송장번호'])
+            for o in done:
+                ws.append([
+                    o.get('상품주문번호', ''),
+                    '택배',
+                    '로젠택배',
+                    o['_tracking'],
+                ])
+            wb.save(path)
+            logging.info("스마트스토어 엑셀 자동저장: %s", path)
+            return path
+        except Exception as e:
+            logging.warning("스마트스토어 엑셀 자동저장 실패: %s", e)
+            return None
 
     def save_smartstore_excel(self):
         done = [o for o in self.orders if o['_tracking']]
