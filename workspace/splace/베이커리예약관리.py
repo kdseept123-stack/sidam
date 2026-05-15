@@ -29,6 +29,7 @@ C_OPTION   = 17  # 가격분류 및 옵션 (상품명)
 C_PRICE    = 18  # 결제금액 (항목별)
 C_FINAL    = 20  # 실결제금액 (주문 전체)
 C_PAYMENT  = 21  # 결제수단
+C_REQUEST_FREE = 26  # 요청사항 (자유입력)
 C_REQUEST  = 27  # 예약자입력정보1 (컷팅/노컷)
 
 # ── 프린터 설정 ───────────────────────────────────────────
@@ -108,9 +109,11 @@ def make_receipt_escpos(order):
     lines += _e(f'실결제: {order["final"]:,}원') + b'\n'
     lines += ESC + b'E\x00'
     lines += _e(f'결제:   {order["payment"]}') + b'\n'
-    if order['request']:
+    req_parts = [p for p in [order.get('request') or '', order.get('request_free') or ''] if p]
+    if req_parts:
         lines += SEP
-        lines += _e(f'요청:   {order["request"]}') + b'\n'
+        for rp in req_parts:
+            lines += _e(f'요청:   {rp}') + b'\n'
     lines += b'\n'
     lines += ESC + b'a\x01'
     lines += '감사합니다 ♡\n'.encode('cp949', errors='replace')
@@ -169,6 +172,7 @@ def group_orders(rows):
                 use_date   = str(row[C_USE_DATE] or ''),
                 final      = row[C_FINAL] or 0,
                 payment    = row[C_PAYMENT] or '',
+                request_free = (row[C_REQUEST_FREE] if len(row) > C_REQUEST_FREE else None) or '',
                 request    = row[C_REQUEST] or '',
                 items      = [],
             )
@@ -241,7 +245,8 @@ def make_receipt_html(order):
           <td class="num">{subtotal:,}원</td>
         </tr>'''
 
-    req = f'<p class="req">요청: {order["request"]}</p>' if order['request'] else ''
+    req_parts = [p for p in [order.get('request') or '', order.get('request_free') or ''] if p]
+    req = ''.join(f'<p class="req">요청: {p}</p>' for p in req_parts)
 
     return f'''<!DOCTYPE html>
 <html><head><meta charset="utf-8">
@@ -299,7 +304,8 @@ def make_all_receipts_html(orders):
                            f'<td class="num">{v["count"]}</td>'
                            f'<td class="num">{v["price"]:,}원</td>'
                            f'<td class="num">{subtotal:,}원</td></tr>')
-        req = f'<p class="req">요청: {order["request"]}</p>' if order['request'] else ''
+        req_parts2 = [p for p in [order.get('request') or '', order.get('request_free') or ''] if p]
+        req = ''.join(f'<p class="req">요청: {p}</p>' for p in req_parts2)
         parts.append(f'''<div class="receipt">
 <h2>🥖 {STORE_NAME}</h2>
 <div class="info"><b>예약자:</b> {order["reserver"]}<br>
@@ -438,8 +444,8 @@ class App(tk.Tk):
     # ── 예약 목록 탭 ─────────────────────────────────────
 
     def _build_order_tab(self, parent):
-        cols = ('예약자 / 전화번호', '픽업일시', '상품 목록', '실결제금액', '요청/컷팅', '영수증')
-        widths = [150, 170, 260, 110, 130, 80]
+        cols = ('예약자 / 전화번호', '픽업일시', '상품 목록', '실결제금액', '컷팅/요청사항', '영수증')
+        widths = [150, 170, 240, 100, 200, 80]
 
         frame = tk.Frame(parent, bg=BG_DARK)
         frame.pack(fill='both', expand=True, padx=6, pady=6)
@@ -447,7 +453,7 @@ class App(tk.Tk):
         self.tree = ttk.Treeview(frame, columns=cols, show='headings',
                                   style='Tree.Treeview', selectmode='browse')
         for col, w in zip(cols, widths):
-            anchor = 'w' if col in ('상품 목록', '요청/컷팅', '예약자 / 전화번호') else 'center'
+            anchor = 'w' if col in ('상품 목록', '컷팅/요청사항', '예약자 / 전화번호') else 'center'
             self.tree.heading(col, text=col)
             self.tree.column(col, width=w, anchor=anchor, stretch=col=='상품 목록')
 
@@ -658,10 +664,12 @@ class App(tk.Tk):
             price = f"{o['final']:,}원" if o['final'] else '-'
             tag = 'odd' if i % 2 else 'even'
             name_phone = f"{o['reserver']}  {o['phone']}"
+            req_parts = [p for p in [o.get('request') or '', o.get('request_free') or ''] if p]
+            req_display = '  /  '.join(req_parts)
             self.tree.insert('', 'end',
                              iid=str(o['order_no']),
                              values=(name_phone, o['use_date'],
-                                     items_str, price, o['request'] or '', '🖨 출력'),
+                                     items_str, price, req_display, '🖨 출력'),
                              tags=(tag,))
 
     def _refresh_stat(self):
@@ -755,9 +763,11 @@ class App(tk.Tk):
         divider(thick=True)
         lbl(f'실결제금액:  {order["final"]:,}원', 12, bold=True)
         lbl(f'결제수단:  {order["payment"]}', 10, color='#555')
-        if order['request']:
+        req_parts = [p for p in [order.get('request') or '', order.get('request_free') or ''] if p]
+        if req_parts:
             divider()
-            lbl(f'요청사항:  {order["request"]}', 10, color='#333')
+            for rp in req_parts:
+                lbl(f'요청사항:  {rp}', 10, color='#333')
         divider()
         lbl('감사합니다 ♡', 11, center=True, color='#888', pady=6)
 
