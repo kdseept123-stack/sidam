@@ -59,17 +59,31 @@ def get_printers():
     except:
         return []
 
+def open_in_browser(abs_path):
+    import subprocess
+    url = 'file:///' + abs_path.replace('\\', '/')
+    browser_paths = [
+        r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
+        r'C:\Program Files\Microsoft\Edge\Application\msedge.exe',
+        r'C:\Program Files\Google\Chrome\Application\chrome.exe',
+        r'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe',
+    ]
+    for bp in browser_paths:
+        if os.path.exists(bp):
+            subprocess.Popen([bp, url])
+            return
+    subprocess.Popen(f'start "" "{url}"', shell=True)
+
 def print_html_to_printer(html_path, printer_name=None):
-    import subprocess as sp
     abs_path = os.path.abspath(html_path)
     if printer_name and printer_name != '(기본 프린터 사용)':
         ret = ctypes.windll.shell32.ShellExecuteW(
             None, 'printto', abs_path, printer_name, None, 0
         )
         if ret <= 32:
-            sp.Popen(['start', '', abs_path], shell=True)
+            open_in_browser(abs_path)
     else:
-        sp.Popen(['start', '', abs_path], shell=True)
+        open_in_browser(abs_path)
 
 # ── ESC/POS 직접 출력 ──────────────────────────────────────
 
@@ -339,6 +353,9 @@ def make_all_receipts_html(orders):
 
 def make_all_orders_html(orders):
     today = datetime.date.today().strftime('%Y년 %m월 %d일')
+    tomorrow = (datetime.date.today() + datetime.timedelta(days=1))
+    weekdays = ['월', '화', '수', '목', '금', '토', '일']
+    tomorrow_str = f'{tomorrow.strftime("%Y년 %m월 %d일")} ({weekdays[tomorrow.weekday()]})'
     rows = ''
     for i, o in enumerate(orders):
         grouped = {}
@@ -347,20 +364,24 @@ def make_all_orders_html(orders):
         items_str = ', '.join(f'{k}×{v}' for k, v in grouped.items())
         tr_style = 'color:#aaa;' if '취소' in str(o['status']) else ''
         rows += (f'<tr style="{tr_style}"><td>{i+1}</td>'
-                 f'<td>{o["reserver"]}</td><td>{o["phone"]}</td>'
+                 f'<td style="white-space:nowrap">{o["reserver"]}</td><td>{o["phone"]}</td>'
                  f'<td>{o["use_date"]}</td><td>{items_str}</td>'
                  f'<td style="text-align:right">{o["final"]:,}원</td>'
                  f'<td>{o["request"] or ""}</td></tr>\n')
     return f'''<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>
   body{{font-family:"맑은 고딕",sans-serif;font-size:11px;margin:16px}}
+  .pickup-date{{font-size:28px;font-weight:bold;color:#222;margin-bottom:6px;line-height:1.2}}
   h2{{text-align:center;margin-bottom:4px}}
   p.sub{{text-align:right;margin:0 0 8px;color:#666}}
   table{{width:100%;border-collapse:collapse}}
   th{{background:#333;color:#fff;padding:5px 8px}}
   td{{padding:4px 8px;border-bottom:1px solid #e0e0e0}}
   @media print{{@page{{margin:1cm}}}}
-</style></head><body>
+</style>
+<script>window.onload = function(){{ setTimeout(function(){{ window.print(); }}, 600); }}</script>
+</head><body>
+<div class="pickup-date">📅 {tomorrow_str}</div>
 <h2>🥖 {STORE_NAME} — 예약 목록</h2>
 <p class="sub">{today} 기준 · 총 {len(orders)}건</p>
 <table><tr><th>No</th><th>예약자</th><th>전화번호</th>
@@ -827,8 +848,7 @@ class App(tk.Tk):
             )
             tmp.write(html)
             tmp.close()
-            import subprocess as sp
-            sp.Popen(['start', '', os.path.abspath(tmp.name)], shell=True)
+            open_in_browser(os.path.abspath(tmp.name))
             self.lbl_status.config(text=f'브라우저가 열렸습니다 — Ctrl+P로 인쇄하세요  ({len(active)}건)')
 
     def _print_all_orders(self):
