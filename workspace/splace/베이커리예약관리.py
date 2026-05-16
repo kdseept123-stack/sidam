@@ -227,13 +227,8 @@ def update_stats_file(counts, date_label):
         if not sheet_name:
             break
 
-        # 예약 데이터에서 매칭 (부분 일치 포함)
-        matched = 0
-        for prod_name, count in counts.items():
-            p = prod_name.strip()
-            if p == sheet_name or sheet_name in p or p in sheet_name:
-                matched = count
-                break
+        # 예약 데이터에서 매칭 (완전 일치만)
+        matched = counts.get(sheet_name, 0)
         ws.cell(row_num, 2).value = matched
         total += matched
 
@@ -879,16 +874,41 @@ class App(tk.Tk):
             today = datetime.date.today().strftime('%Y년 %m월 %d일')
             total = update_stats_file(self.stats, today)
             now = datetime.datetime.now().strftime('%H:%M:%S')
+            stat_total = sum(self.stats.values())
             self.lbl_status.config(
                 text=f'✅ 통계 저장 완료 ({now})'
             )
-            # 확인 팝업 + 파일 열기 선택
+            # 두 합계가 다를 때 누락 제품 표시
+            if total != stat_total:
+                unmatched = [f'  • {k} ({v}개)' for k, v in self.stats.items()
+                             if k not in [k2 for k2 in self.stats]]
+                missing_prods = [f'  • {k} ({v}개)' for k, v in self.stats.items()]
+                # 통계 파일에 없는 제품 찾기
+                extra_msg = f'\n\n⚠ 통계 파일 시트에 없는 제품 ({stat_total - total}개 누락):\n'
+                # update_stats_file 에서 매칭 안 된 항목을 여기서 다시 계산
+                import openpyxl as _oxl
+                _wb = _oxl.load_workbook(STATS_FILE)
+                _ws = _wb[HYUNGMAN_SHEET]
+                sheet_names = set()
+                for _r in range(STATS_START_ROW, _ws.max_row + 1):
+                    _v = _ws.cell(_r, 1).value
+                    if _v is None: break
+                    sheet_names.add(str(_v).strip())
+                missed = {k: v for k, v in self.stats.items() if k not in sheet_names}
+                if missed:
+                    extra_msg += '\n'.join(f'  • {k} ({v}개)' for k, v in missed.items())
+                else:
+                    extra_msg += '  (확인 필요)'
+            else:
+                extra_msg = ''
             ans = messagebox.askyesno(
                 '통계 파일 업데이트 완료',
                 f'[형만님] 시트 B열에 저장됐습니다.\n\n'
                 f'  저장 시각: {today}  {now}\n'
                 f'  상품 종류: {len(self.stats)}가지\n'
-                f'  총 예약 수량: {total}개\n\n'
+                f'  예약 데이터 총계: {stat_total}개\n'
+                f'  통계 파일 저장 합계: {total}개'
+                f'{extra_msg}\n\n'
                 f'지금 엑셀 파일을 열어볼까요?'
             )
             if ans:
