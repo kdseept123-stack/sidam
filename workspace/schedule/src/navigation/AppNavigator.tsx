@@ -5,12 +5,20 @@ import { useTheme } from '../modules/theme/ThemeContext';
 import { useAuth } from '../modules/auth/AuthContext';
 import { getMyGroup, Group } from '../modules/group/groupService';
 import { registerForPushNotifications, savePushToken } from '../modules/notification/notificationService';
+import HomeScreen from '../screens/HomeScreen';
 import CalendarScreen from '../screens/CalendarScreen';
 import ChecklistScreen from '../screens/ChecklistScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import GroupSetupScreen from '../screens/GroupSetupScreen';
 
-const Tab = createBottomTabNavigator();
+export type RootTabParamList = {
+  Home: undefined;
+  Tasks: { initialCategory?: string } | undefined;
+  Calendar: undefined;
+  Settings: undefined;
+};
+
+const Tab = createBottomTabNavigator<RootTabParamList>();
 
 export default function AppNavigator() {
   const { colors } = useTheme();
@@ -20,7 +28,6 @@ export default function AppNavigator() {
   useEffect(() => {
     if (!user) return;
     getMyGroup(user.id).then(setGroup);
-
     registerForPushNotifications().then(token => {
       if (token) savePushToken(user.id, token);
     });
@@ -44,19 +51,47 @@ export default function AppNavigator() {
       }}
     >
       <Tab.Screen
+        name="Home"
+        options={{
+          title: '홈',
+          headerShown: false,
+          tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>🏠</Text>,
+        }}
+      >
+        {() => <HomeScreen groupId={group.id} groupName={group.name} />}
+      </Tab.Screen>
+
+      <Tab.Screen
+        name="Tasks"
+        options={{
+          title: '할 일',
+          tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>✅</Text>,
+        }}
+      >
+        {({ route }) => (
+          <ChecklistScreen
+            groupId={group.id}
+            initialCategory={route.params?.initialCategory as any}
+          />
+        )}
+      </Tab.Screen>
+
+      <Tab.Screen
         name="Calendar"
-        options={{ title: '캘린더', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>📅</Text> }}
+        options={{
+          title: '달력',
+          tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>📅</Text>,
+        }}
       >
         {() => <CalendarScreen groupId={group.id} />}
       </Tab.Screen>
-      <Tab.Screen
-        name="Checklist"
-        options={{ title: '오늘 할 일', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>✅</Text> }}
-        component={ChecklistScreen}
-      />
+
       <Tab.Screen
         name="Settings"
-        options={{ title: '설정', tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>⚙️</Text> }}
+        options={{
+          title: '설정',
+          tabBarIcon: ({ color }) => <Text style={{ fontSize: 22, color }}>⚙️</Text>,
+        }}
       >
         {() => <SettingsScreen groupId={group.id} groupName={group.name} />}
       </Tab.Screen>
