@@ -2,23 +2,15 @@
 """
 스마트플레이스 자동화 - 매일 밤 10시 (화~토)
 1. 내일 날짜 전체마감
-2. 확정 예약 상세 내려받기 → 바탕화면 저장
+2. 확정 예약 상세 내려받기 -> 바탕화면 저장
 """
-import datetime, time, os, glob, logging, sys, subprocess
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.common.keys import Keys
-from webdriver_manager.chrome import ChromeDriverManager
+import datetime, os, glob, logging, sys
+from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
-DESKTOP    = r'C:\Users\남혜은\Desktop'
-DOWNLOADS  = os.path.join(os.path.expanduser('~'), 'Downloads')
-BIZES_ID   = '635147'
-CHROME_DIR = r'C:\Users\남혜은\AppData\Local\Google\Chrome\User Data'
-LOG_FILE   = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'splace_auto.log')
+DESKTOP  = r'C:\Users\남혜은\Desktop'
+BIZES_ID = '635147'
+AUTH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'naver_auth.json')
+LOG_FILE  = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'splace_auto.log')
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,165 +23,223 @@ logging.basicConfig(
 log = logging.getLogger()
 
 
-def close_chrome():
-    subprocess.run(['taskkill', '/F', '/IM', 'chrome.exe'], capture_output=True)
-    time.sleep(2)
 
+def step1_close_all(page, tomorrow):
+    log.info(f'[1단계] 전체마감 {tomorrow}')
+    page.goto(f'https://partner.booking.naver.com/bizes/{BIZES_ID}/simple-management')
+    page.wait_for_load_state('networkidle', timeout=15000)
+    page.wait_for_timeout(1500)
 
-def make_driver():
-    options = Options()
-    options.add_argument(f'--user-data-dir={CHROME_DIR}')
-    options.add_argument('--profile-directory=Default')
-    options.add_argument('--no-first-run')
-    options.add_argument('--no-default-browser-check')
-    options.add_argument('--disable-extensions')
-    options.add_experimental_option('prefs', {
-        'download.default_directory': DESKTOP,
-        'download.prompt_for_download': False,
-        'download.directory_upgrade': True,
-    })
-    options.add_experimental_option('excludeSwitches', ['enable-logging'])
-    service = Service(ChromeDriverManager().install())
-    return webdriver.Chrome(service=service, options=options)
+    # 내일 날짜로 이동: ▶ (다음날) 버튼 클릭
+    # simple-management 는 오늘 날짜로 시작 → ▶ 한 번 클릭하면 내일로 이동
+    moved = page.evaluate('''() => {
+        const btns = [...document.querySelectorAll('button, a')];
+        const nextBtn = btns.find(b => {
+            const txt = (b.textContent || '').trim();
+            const cls = (b.className || '').toLowerCase();
+            const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+            return txt === '▶' || txt === '>' || txt === '›' ||
+                   cls.includes('next') || aria.includes('다음') || aria.includes('next');
+        });
+        if (nextBtn) { nextBtn.click(); return nextBtn.textContent.trim().substring(0, 5); }
+        return null;
+    }''')
 
-
-def step1_close_all(driver, tomorrow):
-    wait = WebDriverWait(driver, 20)
-    day = str(tomorrow.day)
-    log.info(f'[1단계] 전체마감 — {tomorrow}')
-
-    driver.get(f'https://partner.booking.naver.com/bizes/{BIZES_ID}/simple-management')
-    time.sleep(5)
-
-    # 내일 날짜 클릭
-    try:
-        cell = wait.until(EC.element_to_be_clickable((By.XPATH,
-            f'//td[normalize-space(.)="{day}"]'
-            f'[not(contains(@class,"disabled"))]'
-            f'[not(contains(@class,"prev-month"))]'
-            f'[not(contains(@class,"next-month"))]'
-        )))
-        cell.click()
-        time.sleep(3)
-        log.info(f'  날짜 선택: {day}일')
-    except Exception as e:
-        log.error(f'  날짜 클릭 실패: {e}')
+    if moved is not None:
+        page.wait_for_timeout(2000)
+        log.info(f'  내일 날짜로 이동 완료 (▶ 클릭: "{moved}")')
+    else:
+        log.error('  ▶ 버튼을 찾지 못함 - 계속 진행')
+        page.screenshot(path=os.path.join(DESKTOP, 'debug_step1_nav.png'))
         return False
 
-    # 전체마감 버튼
     try:
-        btn = wait.until(EC.element_to_be_clickable(
-            (By.XPATH, '//button[contains(text(),"전체마감")]')
-        ))
-        btn.click()
-        time.sleep(2)
-        log.info('  전체마감 클릭')
-
+        page.get_by_role('button', name='전체마감').click(timeout=8000)
+        page.wait_for_timeout(1500)
         # 확인 팝업
         try:
-            confirm = WebDriverWait(driver, 5).until(EC.element_to_be_clickable(
-                (By.XPATH, '//button[contains(text(),"확인") or contains(text(),"마감하기")]')
-            ))
-            confirm.click()
-            time.sleep(2)
-        except:
-            pass
+            page.get_by_role('button', name='확인').click(timeout=4000)
+            page.wait_for_timeout(1500)
+        except PWTimeout:
+            try:
+                page.get_by_role('button', name='마감하기').click(timeout=4000)
+                page.wait_for_timeout(1500)
+            except PWTimeout:
+                pass
         log.info('  전체마감 완료')
         return True
-    except Exception as e:
-        log.error(f'  전체마감 실패: {e}')
-        return False
+    except PWTimeout:
+        log.error('  전체마감 버튼 없음 (이미 마감됐을 수 있음)')
+        return True
 
 
-def step2_download(driver, tomorrow):
-    wait = WebDriverWait(driver, 20)
+def step2_download(page, tomorrow):
     tomorrow_str = tomorrow.strftime('%Y.%m.%d')
-    log.info(f'[2단계] 예약 목록 다운로드 — {tomorrow_str} / 확정')
+    log.info(f'[2단계] 다운로드 {tomorrow_str} / 확정')
+    page.goto(f'https://partner.booking.naver.com/bizes/{BIZES_ID}/booking-list-view')
+    page.wait_for_load_state('networkidle', timeout=15000)
 
-    driver.get(f'https://partner.booking.naver.com/bizes/{BIZES_ID}/booking-list-view')
-    time.sleep(5)
-
-    # 날짜 입력 (시작~종료 모두 내일로)
+    # CDP로 Chrome 다운로드 위치를 Desktop으로 강제 지정 (blob URL 다운로드도 캡처)
     try:
-        inputs = driver.find_elements(By.XPATH,
-            '//input[@placeholder="YYYY.MM.DD" or @placeholder="yyyy.mm.dd"]'
-        )
+        cdp = page.context.new_cdp_session(page)
+        cdp.send('Browser.setDownloadBehavior', {
+            'behavior': 'allow',
+            'downloadPath': DESKTOP,
+            'eventsEnabled': True,
+        })
+        log.info('  CDP 다운로드 경로 설정 완료')
+    except Exception as e:
+        log.warning(f'  CDP 설정 실패 (무시): {e}')
+
+    # 날짜 필터: 이용일 드롭다운 → 직접설정 또는 하루
+    try:
+        page.get_by_role('button', name='이용일').click(timeout=5000)
+        page.wait_for_timeout(800)
+        try:
+            page.get_by_text('직접설정', exact=True).click(timeout=3000)
+        except PWTimeout:
+            page.get_by_text('하루', exact=True).click(timeout=3000)
+        page.wait_for_timeout(1000)
+    except PWTimeout:
+        pass
+
+    try:
+        inputs = page.locator('input[placeholder="YYYY.MM.DD"]').all()
+        if not inputs:
+            inputs = page.locator('input[placeholder="yyyy.mm.dd"]').all()
         for inp in inputs[:2]:
-            inp.click()
-            inp.send_keys(Keys.CONTROL + 'a')
-            inp.send_keys(tomorrow_str)
-            inp.send_keys(Keys.ENTER)
-            time.sleep(1)
-        log.info(f'  날짜 입력 완료')
+            inp.triple_click()
+            inp.type(tomorrow_str)
+            inp.press('Enter')
+            page.wait_for_timeout(500)
+        log.info('  날짜 입력 완료')
     except Exception as e:
         log.error(f'  날짜 입력 실패: {e}')
 
-    time.sleep(2)
+    page.wait_for_timeout(2000)
 
-    # 예약상태 → 확정
+    # 예약상태 -> 확정 (드롭다운 방식 우선 시도)
+    confirmed = False
+    for btn_name in ['예약상태', '상태']:
+        try:
+            page.locator(f'button:has-text("{btn_name}")').first.click(timeout=4000)
+            page.wait_for_timeout(800)
+            page.get_by_text('확정', exact=True).first.click(timeout=4000)
+            page.wait_for_timeout(2000)
+            log.info('  상태 필터: 확정')
+            confirmed = True
+            break
+        except PWTimeout:
+            continue
+    if not confirmed:
+        try:
+            page.get_by_role('button', name='확정', exact=True).click(timeout=5000)
+            page.wait_for_timeout(2000)
+            log.info('  상태 필터: 확정 (직접)')
+        except PWTimeout:
+            log.error('  상태 필터 실패 - 계속 진행')
+
+    # 응답/새탭 감시 등록 (팝업 클릭 전)
+    excel_data = []
+    recent_responses = []
+    new_pages = []
+
+    def on_response(resp):
+        ct = resp.headers.get('content-type', '').lower()
+        url = resp.url
+        recent_responses.append(f'{url[-60:]}|{ct[:40]}')
+        is_excel = ('spreadsheet' in ct or 'excel' in ct or
+                    url.lower().endswith('.xlsx') or url.lower().endswith('.xls') or
+                    'download' in ct)
+        if is_excel:
+            try:
+                body = resp.body()
+                log.info(f'  Excel 응답 감지 {len(body)}bytes: {url[-80:]}')
+                excel_data.append(body)
+            except Exception as ex:
+                log.warning(f'  Excel 응답 body 실패: {ex}')
+
+    def on_new_page(np):
+        new_pages.append(np)
+        np.on('response', on_response)
+        np.on('download', lambda d: excel_data.append(d))
+
+    page.on('response', on_response)
+    page.context.on('page', on_new_page)
+
     try:
-        status_btn = wait.until(EC.element_to_be_clickable(
-            (By.XPATH, '//button[contains(.,"예약상태")]')
-        ))
-        status_btn.click()
-        time.sleep(1)
+        # 1) 상세 내려받기 클릭 (팝업 열림)
+        page.get_by_role('button', name='상세 내려받기').click(timeout=8000)
+        page.wait_for_timeout(2000)
 
-        confirmed = wait.until(EC.element_to_be_clickable(
-            (By.XPATH, '//*[self::li or self::span or self::label][normalize-space(.)="확정"]')
-        ))
-        confirmed.click()
-        time.sleep(2)
-        log.info('  상태 필터: 확정')
-    except Exception as e:
-        log.error(f'  상태 필터 실패: {e}')
+        # 2) 팝업의 내려받기 버튼 클릭 ('상세 내려받기' 제외, 마지막 매칭)
+        dl_btn = page.locator('button').filter(has_text='내려받기').filter(has_not_text='상세').last
 
-    # 상세 내려받기
-    try:
-        dl_btn = wait.until(EC.element_to_be_clickable(
-            (By.XPATH, '//button[contains(text(),"상세 내려받기") or contains(text(),"상세내려받기")]')
-        ))
-        dl_btn.click()
-        log.info('  다운로드 시작...')
-        time.sleep(10)
+        try:
+            with page.expect_download(timeout=25000) as dl_info:
+                dl_btn.click(timeout=8000)
+                log.info('  내려받기 클릭')
+
+            download = dl_info.value
+            dest = os.path.join(DESKTOP, download.suggested_filename)
+            download.save_as(dest)
+            log.info(f'  다운로드 완료: {download.suggested_filename}')
+            return True
+
+        except Exception as e1:
+            log.error(f'  expect_download 실패: {e1}')
+            log.info(f'  최근 응답: {recent_responses[-8:]}')
+            log.info(f'  새 탭: {[p.url for p in new_pages]}')
+
+            # 응답 인터셉터가 Excel 바이트를 잡았으면 저장
+            for item in excel_data:
+                if isinstance(item, (bytes, bytearray)) and len(item) > 1000:
+                    fname = f'reservation_{tomorrow.strftime("%Y%m%d")}.xlsx'
+                    dest = os.path.join(DESKTOP, fname)
+                    with open(dest, 'wb') as f:
+                        f.write(item)
+                    log.info(f'  응답 인터셉터로 저장: {fname}')
+                    return True
+
+            # 새 탭에서의 다운로드 객체 처리
+            for item in excel_data:
+                if hasattr(item, 'suggested_filename'):
+                    dest = os.path.join(DESKTOP, item.suggested_filename)
+                    item.save_as(dest)
+                    log.info(f'  새 탭 다운로드 저장: {item.suggested_filename}')
+                    return True
+
+            page.screenshot(path=os.path.join(DESKTOP, 'debug_no_download.png'))
+            return False
+
     except Exception as e:
-        log.error(f'  다운로드 버튼 실패: {e}')
+        page.screenshot(path=os.path.join(DESKTOP, 'debug_download_fail.png'))
+        log.error(f'  다운로드 실패: {e}')
         return False
-
-    # 파일 확인 (바탕화면 우선, 없으면 Downloads에서 이동)
-    pattern_desk = os.path.join(DESKTOP, '시간을담다베이커리_예약자관리_*.xlsx')
-    files = sorted(glob.glob(pattern_desk), key=os.path.getmtime, reverse=True)
-    if files:
-        log.info(f'  저장 완료: {os.path.basename(files[0])}')
-        return True
-
-    pattern_dl = os.path.join(DOWNLOADS, '시간을담다베이커리_예약자관리_*.xlsx')
-    files = sorted(glob.glob(pattern_dl), key=os.path.getmtime, reverse=True)
-    if files:
-        dest = os.path.join(DESKTOP, os.path.basename(files[0]))
-        os.replace(files[0], dest)
-        log.info(f'  바탕화면으로 이동: {os.path.basename(dest)}')
-        return True
-
-    log.warning('  파일을 찾지 못했습니다 — 수동 확인 필요')
-    return False
 
 
 def run():
+    if not os.path.exists(AUTH_FILE):
+        log.error('세션 파일 없음! naver_login_setup.py 를 먼저 실행하세요.')
+        return
+
     tomorrow = datetime.date.today() + datetime.timedelta(days=1)
     log.info(f'========== 자동화 시작 {datetime.datetime.now().strftime("%Y-%m-%d %H:%M")} ==========')
 
-    close_chrome()
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False)
+        context = browser.new_context(storage_state=AUTH_FILE)
+        page = context.new_page()
 
-    driver = None
-    try:
-        driver = make_driver()
-        step1_close_all(driver, tomorrow)
-        step2_download(driver, tomorrow)
-    except Exception as e:
-        log.error(f'오류: {e}')
-    finally:
-        if driver:
-            driver.quit()
+        try:
+            step1_close_all(page, tomorrow)
+            step2_download(page, tomorrow)
+        except Exception as e:
+            log.error(f'오류: {e}')
+            page.screenshot(path=os.path.join(DESKTOP, 'splace_error.png'))
+        finally:
+            context.storage_state(path=AUTH_FILE)  # 세션 갱신 저장
+            browser.close()
 
     log.info('========== 자동화 완료 ==========\n')
 
