@@ -12,7 +12,7 @@ test_data = (
     GS + b'V\x41\x00'
 )
 
-for printer in [r'\\172.30.1.82\receipt', 'SLK-TS100 (copy 1)']:
+for printer in ['SEWOO SLK-TS100 (copy 1)']:
     print(f"Testing: {printer}")
     try:
         hp = win32print.OpenPrinter(printer)
