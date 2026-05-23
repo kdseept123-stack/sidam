@@ -356,13 +356,15 @@ def make_all_orders_html(orders):
         grouped = {}
         for it in o['items']:
             grouped[it['option']] = grouped.get(it['option'], 0) + 1
-        items_str = ', '.join(f'{k}×{v}' for k, v in grouped.items())
+        items_str = ''.join(f'<div style="white-space:nowrap">{k}×{v}</div>' for k, v in grouped.items())
         tr_style = 'color:#aaa;' if '취소' in str(o['status']) else ''
+        req_parts = [p for p in [o.get('request') or '', o.get('request_free') or ''] if p]
+        req_str = '  /  '.join(req_parts)
         rows += (f'<tr style="{tr_style}"><td>{i+1}</td>'
                  f'<td style="white-space:nowrap">{o["reserver"]}</td><td>{o["phone"]}</td>'
                  f'<td>{o["use_date"]}</td><td>{items_str}</td>'
                  f'<td style="text-align:right">{o["final"]:,}원</td>'
-                 f'<td>{o["request"] or ""}</td></tr>\n')
+                 f'<td>{req_str}</td></tr>\n')
     return f'''<!DOCTYPE html><html><head><meta charset="utf-8">
 <style>
   body{{font-family:"맑은 고딕",sans-serif;font-size:11px;margin:16px}}
