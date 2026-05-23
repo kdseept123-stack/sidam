@@ -642,12 +642,12 @@ class App(tk.Tk):
             self._refresh_stat()
 
             # 통계 파일 자동 저장
-            self._auto_save_stats(fname)
+            self._auto_save_stats(fname, path)
 
         except Exception as e:
             messagebox.showerror('파일 오류', str(e))
 
-    def _auto_save_stats(self, fname):
+    def _auto_save_stats(self, fname, source_path=None):
         if not self.stats:
             self.lbl_status.config(text=f'{fname}  |  총 {len(self.orders)}건  |  ⚠ 예약 데이터 없음')
             return
@@ -658,8 +658,19 @@ class App(tk.Tk):
             today = datetime.date.today().strftime('%Y년 %m월 %d일')
             update_stats_file(self.stats, today)
             now = datetime.datetime.now().strftime('%H:%M:%S')
+
+            # 통계 저장 성공 후 바탕화면 원본 파일 삭제
+            deleted = False
+            if source_path and os.path.exists(source_path):
+                desktop = os.path.normpath(DESKTOP)
+                src = os.path.normpath(source_path)
+                if src.startswith(desktop):
+                    os.remove(source_path)
+                    deleted = True
+
+            suffix = '  |  🗑 원본 파일 삭제 완료' if deleted else ''
             self.lbl_status.config(
-                text=f'{fname}  |  총 {len(self.orders)}건  |  ✅ 통계 자동저장 완료 ({now})'
+                text=f'{fname}  |  총 {len(self.orders)}건  |  ✅ 통계 자동저장 완료 ({now}){suffix}'
             )
         except PermissionError:
             self.lbl_status.config(
