@@ -41,6 +41,12 @@
         "projectId": "e58413db-f1ca-43d4-9328-50c57f62d525"
       }
     },
-    "owner": "hyeeun0301"
+    "owner": "hyeeun0301",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/e58413db-f1ca-43d4-9328-50c57f62d525"
+    }
   }
 }
