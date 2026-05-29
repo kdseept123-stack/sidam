@@ -34,12 +34,13 @@
           "sounds": [],
           "androidMode": "default"
         }
-      ],
+      ]
     ],
     "extra": {
       "eas": {
-        "projectId": "YOUR_EAS_PROJECT_ID"
+        "projectId": "e58413db-f1ca-43d4-9328-50c57f62d525"
       }
-    }
+    },
+    "owner": "hyeeun0301"
   }
 }
