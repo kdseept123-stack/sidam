@@ -1,9 +1,10 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   FlatList, Modal, ScrollView,
 } from 'react-native';
+import { Calendar, DateData } from 'react-native-calendars';
 import { format } from 'date-fns';
 import { ko } from 'date-fns/locale';
 import { useTheme } from '../modules/theme/ThemeContext';
@@ -44,6 +45,7 @@ export default function ChecklistScreen({ groupId, initialCategory }: Props) {
   const [newDueDate, setNewDueDate] = useState('');
   const [repeatType, setRepeatType] = useState<'none' | 'daily' | 'weekly'>('none');
   const [selectedDays, setSelectedDays] = useState<number[]>([]);
+  const [showDatePicker, setShowDatePicker] = useState(false);
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -82,6 +84,7 @@ export default function ChecklistScreen({ groupId, initialCategory }: Props) {
     setNewDueDate('');
     setRepeatType('none');
     setSelectedDays([]);
+    setShowDatePicker(false);
   }
 
   async function handleToggle(task: Task) {
@@ -213,13 +216,41 @@ export default function ChecklistScreen({ groupId, initialCategory }: Props) {
             ))}
 
             <Text style={s.fieldLabel}>마감일 (선택)</Text>
-            <TextInput
-              style={s.modalInput}
-              placeholder="예: 2026-06-30"
-              placeholderTextColor={colors.textMuted}
-              value={newDueDate}
-              onChangeText={setNewDueDate}
-            />
+            <TouchableOpacity
+              style={s.datePickerBtn}
+              onPress={() => setShowDatePicker(v => !v)}
+            >
+              <Text style={newDueDate ? s.datePickerText : s.datePickerPlaceholder}>
+                {newDueDate ? format(new Date(newDueDate), 'yyyy년 M월 d일 (E)', { locale: ko }) : '날짜를 선택하세요'}
+              </Text>
+              {newDueDate ? (
+                <TouchableOpacity onPress={() => { setNewDueDate(''); setShowDatePicker(false); }}>
+                  <Text style={s.dateClear}>×</Text>
+                </TouchableOpacity>
+              ) : null}
+            </TouchableOpacity>
+            {showDatePicker && (
+              <Calendar
+                current={newDueDate || format(new Date(), 'yyyy-MM-dd')}
+                onDayPress={(day: DateData) => {
+                  setNewDueDate(day.dateString);
+                  setShowDatePicker(false);
+                }}
+                markedDates={newDueDate ? { [newDueDate]: { selected: true, selectedColor: colors.primary } } : {}}
+                theme={{
+                  backgroundColor: colors.surface,
+                  calendarBackground: colors.surface,
+                  textSectionTitleColor: colors.textMuted,
+                  selectedDayBackgroundColor: colors.primary,
+                  selectedDayTextColor: colors.textInverse,
+                  todayTextColor: colors.primary,
+                  dayTextColor: colors.text,
+                  monthTextColor: colors.text,
+                  arrowColor: colors.primary,
+                }}
+                style={s.calendar}
+              />
+            )}
 
             <Text style={s.fieldLabel}>반복</Text>
             {(['none', 'daily', 'weekly'] as const).map(type => (
@@ -306,4 +337,9 @@ const styles = (colors: ReturnType<typeof useTheme>['colors']) =>
     dayBtnActive: { backgroundColor: colors.primary, borderColor: colors.primary },
     dayBtnText: { fontSize: 12, color: colors.text },
     dayBtnTextActive: { color: colors.textInverse, fontWeight: '700' },
+    datePickerBtn: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: colors.surface, borderRadius: 12, padding: 14, borderWidth: 1, borderColor: colors.border, marginBottom: 8 },
+    datePickerText: { fontSize: 15, color: colors.text },
+    datePickerPlaceholder: { fontSize: 15, color: colors.textMuted },
+    dateClear: { fontSize: 20, color: colors.textMuted, paddingHorizontal: 4 },
+    calendar: { borderRadius: 12, marginBottom: 8, borderWidth: 1, borderColor: colors.border },
   });
