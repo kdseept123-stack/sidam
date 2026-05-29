@@ -1,7 +1,7 @@
 import { supabase } from '../../lib/supabase';
 import { format, startOfWeek, endOfWeek } from 'date-fns';
 
-export type Category = 'urgent' | 'quick' | 'longterm' | 'reduce';
+export type Category = 'daily' | 'slow';
 
 export type RepeatRule =
   | null
@@ -77,7 +77,7 @@ export async function getWeekCategorySummary(groupId: string): Promise<CategoryS
   if (error) throw error;
   const tasks = (data ?? []) as { category: Category; title: string; is_done: boolean }[];
 
-  const categories: Category[] = ['urgent', 'quick', 'longterm', 'reduce'];
+  const categories: Category[] = ['daily', 'slow'];
   return categories.map(cat => {
     const matching = tasks.filter(t => t.category === cat);
     return {
@@ -156,14 +156,33 @@ export async function importEventAsTask(
   eventId: string,
   title: string,
   eventDate: string,
+  category: Category = 'daily',
 ): Promise<Task> {
   const { data, error } = await supabase
     .from('tasks')
-    .insert({ user_id: userId, title, date: eventDate, source_event_id: eventId })
+    .insert({ user_id: userId, title, date: eventDate, source_event_id: eventId, category })
     .select()
     .single();
   if (error) throw error;
   return data as Task;
+}
+
+export async function removeTaskByEventId(userId: string, eventId: string): Promise<void> {
+  const { error } = await supabase
+    .from('tasks')
+    .delete()
+    .eq('user_id', userId)
+    .eq('source_event_id', eventId);
+  if (error) throw error;
+}
+
+export async function getImportedEventIds(userId: string): Promise<Set<string>> {
+  const { data } = await supabase
+    .from('tasks')
+    .select('source_event_id')
+    .eq('user_id', userId)
+    .not('source_event_id', 'is', null);
+  return new Set((data ?? []).map((r: any) => r.source_event_id as string));
 }
 
 export async function toggleTask(id: string, isDone: boolean): Promise<void> {

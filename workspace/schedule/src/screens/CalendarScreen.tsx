@@ -12,6 +12,9 @@ import {
   CalendarEvent, getEventsForMonth, getEventsForDay,
   createEvent, updateEvent, deleteEvent, subscribeToGroupEvents,
 } from '../modules/calendar/calendarService';
+import {
+  importEventAsTask, removeTaskByEventId, getImportedEventIds, Category,
+} from '../modules/checklist/checklistService';
 import { scheduleEventNotification, cancelEventNotification } from '../modules/notification/notificationService';
 
 interface Props {
@@ -28,6 +31,7 @@ export default function CalendarScreen({ groupId }: Props) {
   const [modalVisible, setModalVisible] = useState(false);
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
   const [form, setForm] = useState({ title: '', date: '', time: '', endTime: '', memo: '' });
+  const [checkedEventIds, setCheckedEventIds] = useState<Set<string>>(new Set());
 
   const loadMonth = useCallback(async () => {
     const data = await getEventsForMonth(groupId, currentMonth.year, currentMonth.month);
@@ -39,8 +43,15 @@ export default function CalendarScreen({ groupId }: Props) {
     setDayEvents(events);
   }, [groupId, selectedDate]);
 
+  const loadChecked = useCallback(async () => {
+    if (!user) return;
+    const ids = await getImportedEventIds(user.id);
+    setCheckedEventIds(ids);
+  }, [user]);
+
   useEffect(() => { loadMonth(); }, [loadMonth]);
   useEffect(() => { loadDay(); }, [loadDay]);
+  useEffect(() => { loadChecked(); }, [loadChecked]);
 
   useEffect(() => {
     const channel = subscribeToGroupEvents(groupId, () => {
@@ -94,6 +105,43 @@ export default function CalendarScreen({ groupId }: Props) {
     }
   }
 
+  async function handleCheckEvent(event: CalendarEvent) {
+    if (!user) return;
+    const eventDate = format(new Date(event.start_at), 'yyyy-MM-dd');
+
+    if (checkedEventIds.has(event.id)) {
+      await removeTaskByEventId(user.id, event.id);
+      setCheckedEventIds(prev => { const s = new Set(prev); s.delete(event.id); return s; });
+      return;
+    }
+
+    Alert.alert('할 일 목록에 추가', `"${event.title}"을 어느 목록에 추가할까요?`, [
+      {
+        text: '하루에 해야할 일',
+        onPress: async () => {
+          try {
+            await importEventAsTask(user.id, event.id, event.title, eventDate, 'daily');
+            setCheckedEventIds(prev => new Set(prev).add(event.id));
+          } catch (e: any) {
+            Alert.alert('오류', e.message);
+          }
+        },
+      },
+      {
+        text: '천천히 해야할 일',
+        onPress: async () => {
+          try {
+            await importEventAsTask(user.id, event.id, event.title, eventDate, 'slow');
+            setCheckedEventIds(prev => new Set(prev).add(event.id));
+          } catch (e: any) {
+            Alert.alert('오류', e.message);
+          }
+        },
+      },
+      { text: '취소', style: 'cancel' },
+    ]);
+  }
+
   async function handleDelete(event: CalendarEvent) {
     Alert.alert('삭제', `"${event.title}" 일정을 삭제할까요?`, [
       { text: '취소', style: 'cancel' },
@@ -142,24 +190,32 @@ export default function CalendarScreen({ groupId }: Props) {
         <FlatList
           data={dayEvents}
           keyExtractor={(item) => item.id}
-          renderItem={({ item }) => (
-            <TouchableOpacity style={s.eventCard} onPress={() => openEdit(item)}>
-              <View style={s.eventDot} />
-              <View style={s.eventInfo}>
-                <Text style={s.eventTitle}>{item.title}</Text>
-                <Text style={s.eventTime}>
-                  {format(parseISO(item.start_at), 'HH:mm')}
-                  {item.end_at ? ` ~ ${format(parseISO(item.end_at), 'HH:mm')}` : ''}
-                  {item.profiles ? ` · ${item.profiles.display_name}` : ''}
-                </Text>
-              </View>
-              {item.created_by === user?.id && (
-                <TouchableOpacity onPress={() => handleDelete(item)} style={s.deleteBtn}>
-                  <Text style={s.deleteBtnText}>삭제</Text>
+          renderItem={({ item }) => {
+            const isChecked = checkedEventIds.has(item.id);
+            return (
+              <TouchableOpacity style={s.eventCard} onPress={() => openEdit(item)}>
+                <View style={s.eventDot} />
+                <View style={s.eventInfo}>
+                  <Text style={s.eventTitle}>{item.title}</Text>
+                  <Text style={s.eventTime}>
+                    {format(parseISO(item.start_at), 'HH:mm')}
+                    {item.end_at ? ` ~ ${format(parseISO(item.end_at), 'HH:mm')}` : ''}
+                    {item.profiles ? ` · ${item.profiles.display_name}` : ''}
+                  </Text>
+                </View>
+                <TouchableOpacity onPress={() => handleCheckEvent(item)} style={[s.checkBtn, isChecked && s.checkBtnActive]}>
+                  <Text style={[s.checkBtnText, isChecked && s.checkBtnTextActive]}>
+                    {isChecked ? '✓ 할일' : '+ 할일'}
+                  </Text>
                 </TouchableOpacity>
-              )}
-            </TouchableOpacity>
-          )}
+                {item.created_by === user?.id && (
+                  <TouchableOpacity onPress={() => handleDelete(item)} style={s.deleteBtn}>
+                    <Text style={s.deleteBtnText}>삭제</Text>
+                  </TouchableOpacity>
+                )}
+              </TouchableOpacity>
+            );
+          }}
           ListEmptyComponent={<Text style={s.empty}>일정이 없어요</Text>}
         />
       </View>
@@ -176,11 +232,17 @@ export default function CalendarScreen({ groupId }: Props) {
             </TouchableOpacity>
           </View>
           <ScrollView style={s.modalBody}>
-            <TextInput style={s.modalInput} placeholder="제목" placeholderTextColor={colors.textMuted} value={form.title} onChangeText={(v) => setForm(f => ({ ...f, title: v }))} />
-            <TextInput style={s.modalInput} placeholder="날짜 (yyyy-MM-dd)" placeholderTextColor={colors.textMuted} value={form.date} onChangeText={(v) => setForm(f => ({ ...f, date: v }))} />
-            <TextInput style={s.modalInput} placeholder="시작 시간 (HH:mm)" placeholderTextColor={colors.textMuted} value={form.time} onChangeText={(v) => setForm(f => ({ ...f, time: v }))} />
-            <TextInput style={s.modalInput} placeholder="종료 시간 (HH:mm, 선택)" placeholderTextColor={colors.textMuted} value={form.endTime} onChangeText={(v) => setForm(f => ({ ...f, endTime: v }))} />
-            <TextInput style={[s.modalInput, s.memoInput]} placeholder="메모 (선택)" placeholderTextColor={colors.textMuted} value={form.memo} onChangeText={(v) => setForm(f => ({ ...f, memo: v }))} multiline />
+            <Text style={s.fieldLabel}>내용</Text>
+            <TextInput style={s.modalInput} placeholder="일정 제목을 입력하세요" placeholderTextColor={colors.textMuted} value={form.title} onChangeText={(v) => setForm(f => ({ ...f, title: v }))} />
+
+            <Text style={s.fieldLabel}>날짜</Text>
+            <TextInput style={s.modalInput} placeholder="2026-05-29" placeholderTextColor={colors.textMuted} value={form.date} onChangeText={(v) => setForm(f => ({ ...f, date: v }))} keyboardType="numbers-and-punctuation" />
+
+            <Text style={s.fieldLabel}>알람 울릴 시간</Text>
+            <TextInput style={s.modalInput} placeholder="09:00" placeholderTextColor={colors.textMuted} value={form.time} onChangeText={(v) => setForm(f => ({ ...f, time: v }))} keyboardType="numbers-and-punctuation" />
+
+            <Text style={s.fieldLabel}>추가 메모 <Text style={s.fieldLabelOptional}>(선택)</Text></Text>
+            <TextInput style={[s.modalInput, s.memoInput]} placeholder="메모를 입력하세요" placeholderTextColor={colors.textMuted} value={form.memo} onChangeText={(v) => setForm(f => ({ ...f, memo: v }))} multiline />
           </ScrollView>
         </View>
       </Modal>
@@ -201,6 +263,10 @@ const styles = (colors: ReturnType<typeof useTheme>['colors']) =>
     eventInfo: { flex: 1 },
     eventTitle: { fontSize: 15, fontWeight: '600', color: colors.text },
     eventTime: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
+    checkBtn: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 10, borderWidth: 1, borderColor: colors.border, marginRight: 6 },
+    checkBtnActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+    checkBtnText: { fontSize: 12, color: colors.textMuted, fontWeight: '600' },
+    checkBtnTextActive: { color: colors.textInverse },
     deleteBtn: { padding: 4 },
     deleteBtnText: { color: colors.danger, fontSize: 13 },
     empty: { textAlign: 'center', color: colors.textMuted, marginTop: 32, fontSize: 14 },
@@ -210,6 +276,8 @@ const styles = (colors: ReturnType<typeof useTheme>['colors']) =>
     modalTitle: { fontSize: 17, fontWeight: '700', color: colors.text },
     modalSave: { fontSize: 16, fontWeight: '700', color: colors.primary },
     modalBody: { padding: 16 },
-    modalInput: { backgroundColor: colors.surface, borderRadius: 12, padding: 14, fontSize: 16, color: colors.text, borderWidth: 1, borderColor: colors.border, marginBottom: 12 },
+    modalInput: { backgroundColor: colors.surface, borderRadius: 12, padding: 14, fontSize: 16, color: colors.text, borderWidth: 1, borderColor: colors.border, marginBottom: 16 },
     memoInput: { height: 100, textAlignVertical: 'top' },
+    fieldLabel: { fontSize: 13, fontWeight: '700', color: colors.textMuted, marginBottom: 6, marginTop: 4, letterSpacing: 0.3 },
+    fieldLabelOptional: { fontSize: 12, fontWeight: '400', color: colors.textMuted },
   });

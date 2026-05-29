@@ -1,6 +1,7 @@
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
+import { ActivityIndicator, View } from 'react-native';
 import { ThemeProvider, useTheme } from './src/modules/theme/ThemeContext';
 import { AuthProvider, useAuth } from './src/modules/auth/AuthContext';
 import LoginScreen from './src/screens/LoginScreen';
@@ -12,7 +13,11 @@ function RootNavigator() {
   const { session, loading } = useAuth();
   const { isDark } = useTheme();
 
-  if (loading) return null;
+  if (loading) return (
+    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+      <ActivityIndicator size="large" />
+    </View>
+  );
 
   return (
     <>

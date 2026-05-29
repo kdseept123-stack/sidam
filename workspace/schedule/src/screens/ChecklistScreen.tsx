@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   FlatList, Modal, ScrollView,
@@ -19,19 +20,15 @@ interface Props {
 }
 
 const TABS: { key: Category | 'all' | 'today'; label: string; dot: string }[] = [
-  { key: 'today',    label: '오늘',  dot: '📋' },
-  { key: 'urgent',   label: '지금',  dot: '🔴' },
-  { key: 'quick',    label: '빠르게', dot: '🟡' },
-  { key: 'longterm', label: '장기',  dot: '🔵' },
-  { key: 'reduce',   label: '줄일',  dot: '⚪' },
-  { key: 'all',      label: '전체',  dot: '📌' },
+  { key: 'today', label: '오늘',      dot: '📋' },
+  { key: 'daily', label: '하루에 할 일', dot: '🔴' },
+  { key: 'slow',  label: '천천히',    dot: '🔵' },
+  { key: 'all',   label: '전체',      dot: '📌' },
 ];
 
 const CATEGORY_LABELS: Record<Category, string> = {
-  urgent:   '지금 해야 할 일',
-  quick:    '빠르게 끝낼 일',
-  longterm: '장기로 가져갈 일',
-  reduce:   '줄일 일',
+  daily: '하루에 해야할 일',
+  slow:  '천천히 해야할 일',
 };
 
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
@@ -43,7 +40,7 @@ export default function ChecklistScreen({ groupId, initialCategory }: Props) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
   const [newTitle, setNewTitle] = useState('');
-  const [newCategory, setNewCategory] = useState<Category>('urgent');
+  const [newCategory, setNewCategory] = useState<Category>('daily');
   const [newDueDate, setNewDueDate] = useState('');
   const [repeatType, setRepeatType] = useState<'none' | 'daily' | 'weekly'>('none');
   const [selectedDays, setSelectedDays] = useState<number[]>([]);
@@ -60,7 +57,7 @@ export default function ChecklistScreen({ groupId, initialCategory }: Props) {
     }
   }, [user, activeTab]);
 
-  useEffect(() => { load(); }, [load]);
+  useFocusEffect(useCallback(() => { load(); }, [load]));
 
   useEffect(() => {
     if (initialCategory) setActiveTab(initialCategory);
@@ -81,7 +78,7 @@ export default function ChecklistScreen({ groupId, initialCategory }: Props) {
 
   function resetForm() {
     setNewTitle('');
-    setNewCategory('urgent');
+    setNewCategory('daily');
     setNewDueDate('');
     setRepeatType('none');
     setSelectedDays([]);
@@ -203,7 +200,7 @@ export default function ChecklistScreen({ groupId, initialCategory }: Props) {
             <Text style={s.modalTask}>"{newTitle}"</Text>
 
             <Text style={s.fieldLabel}>종류</Text>
-            {(['urgent', 'quick', 'longterm', 'reduce'] as Category[]).map(cat => (
+            {(['daily', 'slow'] as Category[]).map(cat => (
               <TouchableOpacity
                 key={cat}
                 style={[s.option, newCategory === cat && s.optionActive]}

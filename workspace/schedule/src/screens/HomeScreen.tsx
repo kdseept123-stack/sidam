@@ -22,10 +22,8 @@ interface Props {
 }
 
 const CATEGORY_CONFIG: Record<Category, { label: string; dot: string; dotColor: string; bg: string }> = {
-  urgent:   { label: '지금 해야 할 일',   dot: '🔴', dotColor: '#FF4757', bg: '#FFF0F1' },
-  quick:    { label: '빠르게 끝낼 일',    dot: '🟡', dotColor: '#FFA502', bg: '#FFFBF0' },
-  longterm: { label: '장기로 가져갈 일',  dot: '🔵', dotColor: '#1E90FF', bg: '#F0F5FF' },
-  reduce:   { label: '줄일 일',           dot: '⚪', dotColor: '#A0A0A0', bg: '#F5F5F5' },
+  daily: { label: '하루에 해야할 일', dot: '🔴', dotColor: '#FF4757', bg: '#FFF0F1' },
+  slow:  { label: '천천히 해야할 일', dot: '🔵', dotColor: '#1E90FF', bg: '#F0F5FF' },
 };
 
 export default function HomeScreen({ groupId, groupName }: Props) {
@@ -60,7 +58,7 @@ export default function HomeScreen({ groupId, groupName }: Props) {
 
   useEffect(() => { load(); }, [load]);
 
-  const topUrgent = summary.find(s => s.category === 'urgent' && s.count > 0)
+  const topUrgent = summary.find(s => s.category === 'daily' && s.count > 0)
     ?? summary.find(s => s.count > 0);
 
   const s = styles(colors);
@@ -132,7 +130,7 @@ export default function HomeScreen({ groupId, groupName }: Props) {
       <View style={s.grid}>
         {(summary.length > 0
           ? summary
-          : (['urgent', 'quick', 'longterm', 'reduce'] as Category[]).map(cat => ({
+          : (['daily', 'slow'] as Category[]).map(cat => ({
               category: cat, count: 0, topTitle: null,
             }))
         ).map(item => {
