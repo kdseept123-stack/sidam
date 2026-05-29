@@ -222,8 +222,6 @@ export default function ChecklistScreen({ groupId, initialCategory }: Props) {
         </TouchableOpacity>
       </View>
 
-    </KeyboardAvoidingView>
-
       {/* Add / Edit modal */}
       <Modal visible={modalVisible} animationType="slide" presentationStyle="pageSheet">
         <View style={s.modal}>
@@ -328,6 +326,7 @@ export default function ChecklistScreen({ groupId, initialCategory }: Props) {
           </ScrollView>
         </View>
       </Modal>
+    </KeyboardAvoidingView>
   );
 }
 
