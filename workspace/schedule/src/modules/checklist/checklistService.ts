@@ -185,6 +185,16 @@ export async function getImportedEventIds(userId: string): Promise<Set<string>> 
   return new Set((data ?? []).map((r: any) => r.source_event_id as string));
 }
 
+export async function updateTask(id: string, updates: {
+  title?: string;
+  category?: Category | null;
+  due_date?: string | null;
+  repeat_rule?: RepeatRule;
+}): Promise<void> {
+  const { error } = await supabase.from('tasks').update(updates).eq('id', id);
+  if (error) throw error;
+}
+
 export async function toggleTask(id: string, isDone: boolean): Promise<void> {
   const { error } = await supabase.from('tasks').update({ is_done: isDone }).eq('id', id);
   if (error) throw error;

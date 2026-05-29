@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useFocusEffect } from '@react-navigation/native';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
-  FlatList, Modal, ScrollView,
+  FlatList, Modal, ScrollView, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { Calendar, DateData } from 'react-native-calendars';
 import { format } from 'date-fns';
@@ -12,7 +12,7 @@ import { useAuth } from '../modules/auth/AuthContext';
 import {
   Task, Category, RepeatRule,
   getAllActiveTasks, getTasksForToday,
-  createTask, toggleTask, deleteTask, generateDailyTasks,
+  createTask, updateTask, toggleTask, deleteTask, generateDailyTasks,
 } from '../modules/checklist/checklistService';
 
 interface Props {
@@ -35,11 +35,12 @@ const CATEGORY_LABELS: Record<Category, string> = {
 const DAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
 export default function ChecklistScreen({ groupId, initialCategory }: Props) {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<Category | 'all' | 'today'>(initialCategory ?? 'today');
   const [tasks, setTasks] = useState<Task[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [newTitle, setNewTitle] = useState('');
   const [newCategory, setNewCategory] = useState<Category>('daily');
   const [newDueDate, setNewDueDate] = useState('');
@@ -65,14 +66,40 @@ export default function ChecklistScreen({ groupId, initialCategory }: Props) {
     if (initialCategory) setActiveTab(initialCategory);
   }, [initialCategory]);
 
-  async function handleAdd() {
+  function openAdd() {
+    if (!newTitle.trim()) return;
+    setEditingTask(null);
+    setModalVisible(true);
+  }
+
+  function openEdit(task: Task) {
+    setEditingTask(task);
+    setNewTitle(task.title);
+    setNewCategory(task.category ?? 'daily');
+    setNewDueDate(task.due_date ?? '');
+    setRepeatType(
+      task.repeat_rule?.type === 'daily' ? 'daily' :
+      task.repeat_rule?.type === 'weekly' ? 'weekly' : 'none'
+    );
+    setSelectedDays(
+      task.repeat_rule && 'days' in task.repeat_rule ? task.repeat_rule.days : []
+    );
+    setModalVisible(true);
+  }
+
+  async function handleSave() {
     if (!newTitle.trim() || !user) return;
     const rule: RepeatRule =
       repeatType === 'daily'  ? { type: 'daily' } :
       repeatType === 'weekly' ? { type: 'weekly', days: selectedDays } :
       null;
     const due = newDueDate.match(/^\d{4}-\d{2}-\d{2}$/) ? newDueDate : null;
-    await createTask(user.id, newTitle.trim(), rule, newCategory, due, groupId);
+
+    if (editingTask) {
+      await updateTask(editingTask.id, { title: newTitle.trim(), category: newCategory, due_date: due, repeat_rule: rule });
+    } else {
+      await createTask(user.id, newTitle.trim(), rule, newCategory, due, groupId);
+    }
     resetForm();
     setModalVisible(false);
     load();
@@ -85,6 +112,7 @@ export default function ChecklistScreen({ groupId, initialCategory }: Props) {
     setRepeatType('none');
     setSelectedDays([]);
     setShowDatePicker(false);
+    setEditingTask(null);
   }
 
   async function handleToggle(task: Task) {
@@ -107,7 +135,7 @@ export default function ChecklistScreen({ groupId, initialCategory }: Props) {
   const s = styles(colors);
 
   return (
-    <View style={s.container}>
+    <KeyboardAvoidingView style={s.container} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       {/* Category tabs */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.tabScroll} contentContainerStyle={s.tabContent}>
         {TABS.map(tab => (
@@ -138,6 +166,7 @@ export default function ChecklistScreen({ groupId, initialCategory }: Props) {
       )}
 
       <FlatList
+        style={{ flex: 1 }}
         data={tasks}
         keyExtractor={item => item.id}
         renderItem={({ item }) => (
@@ -161,6 +190,9 @@ export default function ChecklistScreen({ groupId, initialCategory }: Props) {
                 )}
               </View>
             </View>
+            <TouchableOpacity onPress={() => openEdit(item)} style={s.editBtn}>
+              <Text style={s.editBtnText}>✏️</Text>
+            </TouchableOpacity>
             <TouchableOpacity onPress={() => handleDelete(item.id)} style={s.delBtn}>
               <Text style={s.delBtnText}>×</Text>
             </TouchableOpacity>
@@ -173,34 +205,47 @@ export default function ChecklistScreen({ groupId, initialCategory }: Props) {
       {/* Input bar */}
       <View style={s.inputRow}>
         <TextInput
-          style={s.input}
+          style={[s.input, {
+            color: isDark ? '#F5EDEA' : '#2D2D2D',
+            backgroundColor: isDark ? '#3A2A2E' : '#FFFFFF',
+          }]}
           placeholder="새 할 일 입력..."
-          placeholderTextColor={colors.textMuted}
+          placeholderTextColor={isDark ? '#9A8A88' : '#8A8A8A'}
+          selectionColor={colors.primary}
           value={newTitle}
           onChangeText={setNewTitle}
           returnKeyType="done"
-          onSubmitEditing={() => { if (newTitle.trim()) setModalVisible(true); }}
+          onSubmitEditing={openAdd}
         />
-        <TouchableOpacity style={s.addBtn} onPress={() => { if (newTitle.trim()) setModalVisible(true); }}>
+        <TouchableOpacity style={s.addBtn} onPress={openAdd}>
           <Text style={s.addBtnText}>추가</Text>
         </TouchableOpacity>
       </View>
 
-      {/* Add task modal */}
+    </KeyboardAvoidingView>
+
+      {/* Add / Edit modal */}
       <Modal visible={modalVisible} animationType="slide" presentationStyle="pageSheet">
         <View style={s.modal}>
           <View style={s.modalHeader}>
             <TouchableOpacity onPress={() => { setModalVisible(false); resetForm(); }}>
               <Text style={s.modalCancel}>취소</Text>
             </TouchableOpacity>
-            <Text style={s.modalTitle}>할 일 추가</Text>
-            <TouchableOpacity onPress={handleAdd}>
-              <Text style={s.modalSave}>추가</Text>
+            <Text style={s.modalTitle}>{editingTask ? '할 일 수정' : '할 일 추가'}</Text>
+            <TouchableOpacity onPress={handleSave}>
+              <Text style={s.modalSave}>{editingTask ? '저장' : '추가'}</Text>
             </TouchableOpacity>
           </View>
 
           <ScrollView style={s.modalBody}>
-            <Text style={s.modalTask}>"{newTitle}"</Text>
+            <Text style={s.fieldLabel}>할 일</Text>
+            <TextInput
+              style={s.modalInput}
+              value={newTitle}
+              onChangeText={setNewTitle}
+              placeholder="할 일 내용"
+              placeholderTextColor={colors.textMuted}
+            />
 
             <Text style={s.fieldLabel}>종류</Text>
             {(['daily', 'slow'] as Category[]).map(cat => (
@@ -283,7 +328,6 @@ export default function ChecklistScreen({ groupId, initialCategory }: Props) {
           </ScrollView>
         </View>
       </Modal>
-    </View>
   );
 }
 
@@ -312,11 +356,13 @@ const styles = (colors: ReturnType<typeof useTheme>['colors']) =>
     catBadge: { fontSize: 11, color: colors.primary, backgroundColor: colors.surfaceAlt, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
     dueBadge: { fontSize: 11, color: '#1E90FF', backgroundColor: '#F0F5FF', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
     repeatBadge: { fontSize: 11, color: colors.secondary, backgroundColor: colors.surfaceAlt, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
-    delBtn: { padding: 4 },
-    delBtnText: { fontSize: 20, color: colors.textMuted },
+    editBtn: { padding: 6 },
+    editBtnText: { fontSize: 16 },
+    delBtn: { padding: 6 },
+    delBtnText: { fontSize: 22, color: colors.textMuted },
     empty: { textAlign: 'center', color: colors.textMuted, marginTop: 60, fontSize: 15 },
-    inputRow: { position: 'absolute', bottom: 0, left: 0, right: 0, flexDirection: 'row', padding: 16, backgroundColor: colors.surface, borderTopWidth: 1, borderTopColor: colors.border, gap: 8 },
-    input: { flex: 1, backgroundColor: colors.background, borderRadius: 10, padding: 12, fontSize: 15, color: colors.text, borderWidth: 1, borderColor: colors.border },
+    inputRow: { flexDirection: 'row', padding: 16, backgroundColor: colors.surface, borderTopWidth: 1, borderTopColor: colors.border, gap: 8 },
+    input: { flex: 1, backgroundColor: colors.surfaceAlt, borderRadius: 10, padding: 12, fontSize: 15, color: colors.text, borderWidth: 1, borderColor: colors.border },
     addBtn: { backgroundColor: colors.primary, borderRadius: 10, paddingHorizontal: 18, justifyContent: 'center' },
     addBtnText: { color: colors.textInverse, fontWeight: '700' },
     modal: { flex: 1, backgroundColor: colors.background },
@@ -325,13 +371,12 @@ const styles = (colors: ReturnType<typeof useTheme>['colors']) =>
     modalTitle: { fontSize: 17, fontWeight: '700', color: colors.text },
     modalSave: { fontSize: 16, fontWeight: '700', color: colors.primary },
     modalBody: { padding: 20 },
-    modalTask: { fontSize: 16, color: colors.text, fontWeight: '600', marginBottom: 24 },
     fieldLabel: { fontSize: 13, fontWeight: '700', color: colors.textMuted, marginBottom: 8, marginTop: 16, textTransform: 'uppercase', letterSpacing: 0.5 },
     option: { padding: 14, borderRadius: 12, borderWidth: 1, borderColor: colors.border, marginBottom: 8 },
     optionActive: { borderColor: colors.primary, backgroundColor: colors.surfaceAlt },
     optionText: { fontSize: 15, color: colors.text },
     optionTextActive: { color: colors.primary, fontWeight: '700' },
-    modalInput: { backgroundColor: colors.surface, borderRadius: 12, padding: 14, fontSize: 15, color: colors.text, borderWidth: 1, borderColor: colors.border, marginBottom: 8 },
+    modalInput: { backgroundColor: colors.surfaceAlt, borderRadius: 12, padding: 14, fontSize: 15, color: colors.text, borderWidth: 1, borderColor: colors.border, marginBottom: 8 },
     daysRow: { flexDirection: 'row', gap: 6, marginTop: 8 },
     dayBtn: { flex: 1, padding: 10, borderRadius: 10, borderWidth: 1, borderColor: colors.border, alignItems: 'center' },
     dayBtnActive: { backgroundColor: colors.primary, borderColor: colors.primary },
