@@ -27,10 +27,10 @@ C_PHONE    = 8   # 전화번호
 C_USE_DATE = 13  # 이용일시
 C_OPTION   = 17  # 가격분류 및 옵션 (상품명)
 C_PRICE    = 18  # 결제금액 (항목별)
-C_FINAL    = 20  # 실결제금액 (주문 전체)
+C_FINAL    = 18  # 실결제금액 (주문 전체)
 C_PAYMENT  = 21  # 결제수단
-C_REQUEST_FREE = 26  # 요청사항 (자유입력)
-C_REQUEST  = 27  # 예약자입력정보1 (컷팅/노컷)
+C_REQUEST_FREE = 27  # 요청사항 (자유입력)
+C_REQUEST  = 28  # 예약자입력정보1 (컷팅/노컷)
 
 # ── 프린터 설정 ───────────────────────────────────────────
 
@@ -374,7 +374,13 @@ def make_all_orders_html(orders):
   table{{width:100%;border-collapse:collapse}}
   th{{background:#333;color:#fff;padding:5px 8px}}
   td{{padding:4px 8px;border-bottom:1px solid #e0e0e0}}
-  @media print{{@page{{margin:1cm}}}}
+  @media print{{
+    @page{{margin:1cm;size:A4 landscape}}
+    body{{font-size:9px;margin:8px}}
+    th{{padding:3px 5px;font-size:9px}}
+    td{{padding:3px 5px;font-size:9px}}
+    .pickup-date{{font-size:20px}}
+  }}
 </style>
 <script>window.onload = function(){{ setTimeout(function(){{ window.print(); }}, 600); }}</script>
 </head><body>
