@@ -224,33 +224,62 @@ def calc_stats(orders):
 # ── 통계 파일 업데이트 ────────────────────────────────────
 
 def update_stats_file(counts, date_label):
-    wb = openpyxl.load_workbook(STATS_FILE)
+    """스마트스토어 통계.xlsx 의 [형만님] 시트만 '제자리 수정'한다.
 
-    # 기존 플레이스예약 시트 있으면 제거
-    if '플레이스예약' in wb.sheetnames:
-        del wb['플레이스예약']
+    openpyxl 로 load_workbook → save 하면 이 파일에 들어있는 차트·조건부서식·
+    피벗·이미지 등이 조용히 사라지고, 그 결과 엑셀에서 "복구할까요?" 뜨며
+    안 열리는 손상 파일이 만들어진다.  그래서 openpyxl 이 아니라 엑셀 자체(COM)로
+    파일을 열어 해당 셀만 고치고 저장한다 — 나머지 시트/서식은 전혀 건드리지 않는다.
+    """
+    import xlwings as xw
 
-    ws = wb[HYUNGMAN_SHEET]
-
-    # 헤더 행에 업데이트 날짜 기록
-    ws.cell(STATS_HEADER_ROW, 1).value = f' 스마트플레이스픽업  ({date_label})'
-
-    # A열 제품명 읽어서 B열 수량 업데이트
     total = 0
-    for row_num in range(STATS_START_ROW, ws.max_row + 1):
-        a_val = ws.cell(row_num, 1).value
-        if a_val is None:
-            break  # 제품 목록 끝
-        sheet_name = str(a_val).strip()
-        if not sheet_name:
-            break
+    app = xw.App(visible=False, add_book=False)
+    app.display_alerts = False
+    app.screen_updating = False
+    try:
+        wb = app.books.open(STATS_FILE, update_links=False)
+        try:
+            if wb.api.ReadOnly:
+                # 파일이 이미 다른 곳에서 열려 있음 → 호출부에서 안내 메시지 처리
+                raise PermissionError('통계 파일이 열려 있습니다.')
 
-        # 예약 데이터에서 매칭 (완전 일치만)
-        matched = counts.get(sheet_name, 0)
-        ws.cell(row_num, 2).value = matched
-        total += matched
+            # 기존 '플레이스예약' 시트 제거
+            for sh in list(wb.sheets):
+                if sh.name == '플레이스예약':
+                    sh.delete()
 
-    wb.save(STATS_FILE)
+            ws = wb.sheets[HYUNGMAN_SHEET]
+
+            # 헤더 행에 업데이트 날짜 기록
+            ws.cells(STATS_HEADER_ROW, 1).value = f' 스마트플레이스픽업  ({date_label})'
+
+            # A열 제품명 일괄 읽기 (넉넉히 300행)
+            a_col = ws.range((STATS_START_ROW, 1),
+                             (STATS_START_ROW + 299, 1)).value
+            if not isinstance(a_col, list):
+                a_col = [a_col]
+
+            b_out = []
+            for a_val in a_col:
+                if a_val is None or not str(a_val).strip():
+                    break  # 제품 목록 끝
+                matched = counts.get(str(a_val).strip(), 0)   # 완전 일치만
+                b_out.append(matched)
+                total += matched
+
+            # B열 수량 일괄 쓰기 (세로 방향)
+            if b_out:
+                rng = ws.range((STATS_START_ROW, 2),
+                               (STATS_START_ROW + len(b_out) - 1, 2))
+                rng.options(transpose=True).value = b_out
+
+            wb.save()
+        finally:
+            wb.close()
+    finally:
+        app.quit()
+
     return total
 
 # ── 영수증 ────────────────────────────────────────────────
@@ -926,13 +955,15 @@ class App(tk.Tk):
                 extra_msg = f'\n\n⚠ 통계 파일 시트에 없는 제품 ({stat_total - total}개 누락):\n'
                 # update_stats_file 에서 매칭 안 된 항목을 여기서 다시 계산
                 import openpyxl as _oxl
-                _wb = _oxl.load_workbook(STATS_FILE)
+                # 읽기 전용 — 저장하지 않으므로 파일 손상 위험 없음
+                _wb = _oxl.load_workbook(STATS_FILE, read_only=True, data_only=True)
                 _ws = _wb[HYUNGMAN_SHEET]
                 sheet_names = set()
                 for _r in range(STATS_START_ROW, _ws.max_row + 1):
                     _v = _ws.cell(_r, 1).value
                     if _v is None: break
                     sheet_names.add(str(_v).strip())
+                _wb.close()
                 missed = {k: v for k, v in self.stats.items() if k not in sheet_names}
                 if missed:
                     extra_msg += '\n'.join(f'  • {k} ({v}개)' for k, v in missed.items())
