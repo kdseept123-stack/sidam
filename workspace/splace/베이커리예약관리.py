@@ -8,7 +8,25 @@ import openpyxl
 from openpyxl.styles import Font, Alignment
 import msoffcrypto
 import io, os, glob, tempfile, datetime, json, ctypes
+import traceback, sys
 from collections import defaultdict, OrderedDict
+
+LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), '베이커리예약_오류.log')
+
+def log_error(where, exc):
+    """예외를 로그 파일에 기록하고 메시지박스로도 보여준다."""
+    tb = ''.join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    stamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    try:
+        with open(LOG_FILE, 'a', encoding='utf-8') as f:
+            f.write(f'\n===== {stamp}  [{where}] =====\n{tb}\n')
+    except Exception:
+        pass
+    try:
+        from tkinter import messagebox as _mb
+        _mb.showerror('오류 발생', f'[{where}]\n\n{exc}\n\n자세한 내용은 아래 파일에 저장됐습니다:\n{LOG_FILE}')
+    except Exception:
+        pass
 
 DESKTOP      = r'C:\Users\남혜은\Desktop'
 STATS_FILE   = os.path.join(DESKTOP, '스마트스토어 통계.xlsx')
@@ -405,6 +423,8 @@ FONT_HEAD = ('맑은 고딕', 11, 'bold')
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
+        # 버튼 콜백 등에서 처리 안 된 예외가 나면 앱이 조용히 죽지 않도록 로그+알림
+        self.report_callback_exception = lambda et, ev, tb: log_error('콜백', ev)
         self.title(f'{STORE_NAME}  예약 관리')
         self.geometry('960x680')
         self.configure(bg=BG_DARK)
@@ -821,7 +841,7 @@ class App(tk.Tk):
                     self.lbl_status.config(text='브라우저에서 영수증이 열렸습니다 — Ctrl+P로 인쇄하세요')
                 win.destroy()
             except Exception as e:
-                messagebox.showerror('출력 오류', str(e))
+                log_error('영수증 출력', e)
 
         tk.Button(btn_frame, text='🖨  인쇄하기', command=do_print,
                   bg=ORANGE, fg=WHITE, activebackground='#ff8c5a',
@@ -853,7 +873,7 @@ class App(tk.Tk):
                     print_receipt_direct(o, printer_name)
                 self.lbl_status.config(text=f'✅ 전체 영수증 출력 완료 — {len(active)}건')
             except Exception as e:
-                messagebox.showerror('출력 오류', str(e))
+                log_error('영수증 출력', e)
         else:
             html = make_all_receipts_html(active)
             tmp = tempfile.NamedTemporaryFile(
@@ -931,16 +951,19 @@ class App(tk.Tk):
                 f'지금 엑셀 파일을 열어볼까요?'
             )
             if ans:
-                import subprocess
-                subprocess.Popen(['start', '', STATS_FILE], shell=True)
+                os.startfile(STATS_FILE)
         except PermissionError:
             messagebox.showerror('저장 실패',
                 '통계 파일이 현재 열려 있습니다.\n'
                 '엑셀을 닫고 다시 시도해주세요.')
         except Exception as e:
-            messagebox.showerror('오류', str(e))
+            log_error('통계 파일 업데이트', e)
 
 
 if __name__ == '__main__':
-    app = App()
-    app.mainloop()
+    try:
+        app = App()
+        app.mainloop()
+    except Exception as e:
+        log_error('앱 시작', e)
+        raise
