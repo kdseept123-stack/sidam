@@ -1,0 +1,11 @@
+# 비밀키
+config/.env
+
+# 실행 결과물
+output/
+history.db
+
+# 파이썬
+__pycache__/
+*.pyc
+.venv/
