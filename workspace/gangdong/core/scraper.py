@@ -30,7 +30,7 @@ DETAIL_HINT = re.compile(
     r"(view\.do|/view|read\.do|/read|show/view|selectBoard|boardView|"
     r"nttId=|bbsId=|articleNo=|art_seq=|show_seq=|seq=|idx=|[?&]no=|"
     r"cultcode=|/bbs/[a-z0-9_]+/\d+|contentsView|display/region/content|"
-    r"/home/display/)",
+    r"/home/display/|/tmpr/lctr-evnt/[a-z-]+/\d+)",
     re.IGNORECASE,
 )
 

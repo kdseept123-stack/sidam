@@ -36,7 +36,7 @@ class Event:
     post_url: str = ""
     poster_url: str = ""
     poster_path: str = ""        # 리포트 파일 기준 상대 경로
-    seen_before: bool = False
+    seen_before: bool = False    # 사용자가 리포트에서 체크(사용함 표시)한 적 있음
     event_fp: str = ""
 
 

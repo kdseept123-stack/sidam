@@ -26,6 +26,10 @@ CREATE TABLE IF NOT EXISTS events (
     first_seen  TEXT,
     last_report TEXT
 );
+CREATE TABLE IF NOT EXISTS checked (
+    fp          TEXT PRIMARY KEY,
+    checked_at  TEXT
+);
 """
 
 
@@ -85,6 +89,11 @@ class History:
             (fp, ev.name, ev.start_date, ev.location, ev.post_url, now, report_date),
         )
         self.conn.commit()
+
+    # ---- 사용자 체크(리포트에서 "사용함" 체크박스) ---------------------------
+    def event_checked(self, fp: str) -> bool:
+        row = self.conn.execute("SELECT 1 FROM checked WHERE fp = ?", (fp,)).fetchone()
+        return row is not None
 
     def close(self) -> None:
         self.conn.close()

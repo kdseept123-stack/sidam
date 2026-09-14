@@ -17,3 +17,9 @@ https://culture.seoul.go.kr/culture/culture/cultureEvent/list.do?menuNo=200008
 
 # 강동구 온라인 소식지 (매달 최신호로 자동 연결됨)
 https://egangdong.kr
+
+# 강동구립도서관 - 독서문화프로그램 신청 (영유아~청소년 대상만 수집, core/extract.py 참고)
+https://www.gdlibrary.or.kr/portal/menu/46/tmpr/lctr-evnt/reading
+
+# 강동구립도서관 - 특성화프로그램 (영유아~청소년 대상만 수집, core/extract.py 참고)
+https://www.gdlibrary.or.kr/portal/menu/45/tmpr/lctr-evnt/special

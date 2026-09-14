@@ -32,12 +32,14 @@ def fact_text(ev: Event) -> str:
 
 
 def _sort_key(ev: Event):
-    return (ev.start_date is None, ev.start_date or "9999-99-99", ev.name)
+    # 체크(사용함 표시)한 행사는 목록 맨 아래로 (제외하진 않되, 다시 볼 수 있게 남겨둠)
+    return (ev.seen_before, ev.start_date is None, ev.start_date or "9999-99-99", ev.name)
 
 
 def _card(ev: Event, idx: int) -> str:
     ft = fact_text(ev)
     ft_esc = html.escape(ft)
+    fp = html.escape(ev.event_fp)
 
     if ev.poster_path:
         poster = f'<img class="poster" src="{html.escape(ev.poster_path)}" alt="포스터" loading="lazy">'
@@ -45,15 +47,19 @@ def _card(ev: Event, idx: int) -> str:
         poster = '<div class="poster empty">포스터 없음</div>'
 
     summary = f'<p class="summary">{html.escape(ev.summary)}</p>' if ev.summary else ""
+    badge = '<span class="badge">✅ 체크됨</span>' if ev.seen_before else ""
+    card_class = "card seen" if ev.seen_before else "card"
+    checked_attr = " checked" if ev.seen_before else ""
 
     return f"""
-    <article class="card">
+    <article class="{card_class}" data-fp="{fp}">
       {poster}
       <div class="body">
-        <h3>{html.escape(ev.name)}</h3>
+        <h3>{html.escape(ev.name)}{badge}</h3>
         {summary}
         <pre id="ft{idx}" class="fact">{ft_esc}</pre>
         <div class="actions">
+          <label class="check"><input type="checkbox"{checked_attr} onchange="onCheck(this)"> 사용함(체크)</label>
           <button onclick="copyFact({idx})">📋 정보 복사</button>
           <a href="{html.escape(ev.post_url)}" target="_blank" rel="noopener">원본 글 열기 ↗</a>
         </div>
@@ -66,15 +72,21 @@ def build(
     events: list[Event],
     sources: list[SourceResult],
     today: date,
+    check_port: int | None = None,
 ) -> Path:
     real = sorted([e for e in events if e.classification == "행사"], key=_sort_key)
     maybe = sorted([e for e in events if e.classification == "애매"], key=_sort_key)
 
+    checked_count = sum(1 for e in real if e.seen_before)
     cards = "\n".join(_card(e, i) for i, e in enumerate(real)) or (
-        '<p class="empty-msg">이번에 새로 알려줄 행사가 없습니다. '
-        '(이미 안내한 행사이거나, 소스에 새 글이 없음)</p>'
+        '<p class="empty-msg">알려줄 행사가 없습니다. (소스에 새 글이 없음)</p>'
     )
     maybe_cards = "\n".join(_card(e, 1000 + i) for i, e in enumerate(maybe))
+    maybe_section = (
+        f'<h2>확인 필요 — 행사인지 애매함 ({len(maybe)}건)</h2><div id="maybe-list">{maybe_cards}</div>'
+        if maybe
+        else ""
+    )
 
     src_rows = "\n".join(
         f"<tr class='{'ok' if s.ok else 'fail'}'>"
@@ -102,6 +114,9 @@ def build(
   h2 {{ margin:32px 0 12px; font-size:16px; border-left:4px solid #2b5cff; padding-left:8px; }}
   .card {{ display:flex; gap:14px; background:#fff; border:1px solid #e3e5e8; border-radius:12px;
           padding:14px; margin:12px 0; }}
+  .card.seen {{ opacity:.6; }}
+  .badge {{ display:inline-block; margin-left:8px; font-size:11px; font-weight:400; color:#888;
+           background:#f0f0f0; border-radius:10px; padding:2px 8px; vertical-align:middle; }}
   .poster {{ width:120px; height:160px; object-fit:cover; border-radius:8px; flex:none; background:#eee; }}
   .poster.empty {{ display:flex; align-items:center; justify-content:center; font-size:12px;
                   color:#999; border:1px dashed #ccc; }}
@@ -111,6 +126,8 @@ def build(
   pre.fact {{ white-space:pre-wrap; word-break:break-all; background:#f7f8fa; border:1px solid #e3e5e8;
              border-radius:8px; padding:10px; font-size:13px; margin:6px 0; font-family:inherit; }}
   .actions {{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }}
+  .actions label.check {{ font-size:13px; color:#333; display:inline-flex; align-items:center; gap:4px;
+                          cursor:pointer; user-select:none; }}
   .actions button {{ background:#2b5cff; color:#fff; border:0; border-radius:6px; padding:7px 12px;
                      font-size:13px; cursor:pointer; }}
   .actions button.done {{ background:#28a745; }}
@@ -127,13 +144,13 @@ def build(
 <body>
 <header>
   <h1>강동구 행사 정리</h1>
-  <div class="meta">{today.isoformat()} 생성 · 새 행사 {len(real)}건 · 확인 필요 {len(maybe)}건 · 이미 안내한 행사는 제외됨</div>
+  <div class="meta">{today.isoformat()} 생성 · 행사 {len(real)}건 (체크됨 {checked_count}건) · 확인 필요 {len(maybe)}건 · 체크하면 흐리게 표시되고 맨 아래로 이동, 다음에도 그 상태로 남습니다</div>
 </header>
 <main>
   <h2>행사 ({len(real)}건)</h2>
-  {cards}
+  <div id="real-list">{cards}</div>
 
-  {"<h2>확인 필요 — 행사인지 애매함 (" + str(len(maybe)) + "건)</h2>" + maybe_cards if maybe else ""}
+  {maybe_section}
 
   <details>
     <summary>소스별 수집 결과 ({sum(1 for s in sources if s.ok)}/{len(sources)} 성공)</summary>
@@ -141,6 +158,8 @@ def build(
   </details>
 </main>
 <script>
+  var CHECK_PORT = {check_port if check_port else "null"};
+
   function copyFact(i) {{
     var el = document.getElementById('ft' + i);
     var btn = event.currentTarget;
@@ -150,6 +169,22 @@ def build(
       btn.classList.add('done');
       setTimeout(function() {{ btn.textContent = old; btn.classList.remove('done'); }}, 1500);
     }});
+  }}
+
+  function onCheck(cb) {{
+    var card = cb.closest('.card');
+    var fp = card.getAttribute('data-fp');
+    card.classList.toggle('seen', cb.checked);
+    if (cb.checked) {{
+      card.parentNode.appendChild(card);  // 같은 섹션 안에서 맨 아래로 이동
+    }}
+    if (CHECK_PORT) {{
+      fetch('http://127.0.0.1:' + CHECK_PORT + '/check', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ fp: fp, checked: cb.checked }})
+      }}).catch(function() {{ /* 서버가 이미 꺼졌으면 조용히 무시 */ }});
+    }}
   }}
 </script>
 </body>

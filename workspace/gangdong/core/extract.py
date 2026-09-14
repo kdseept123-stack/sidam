@@ -40,6 +40,24 @@ JSON 배열만 출력한다. 다른 설명 텍스트 금지.
 
 _MAX_BODY = 8000
 
+# 특정 소스에만 적용하는 추가 규칙 (키: source 도메인에 포함되는 문자열)
+SOURCE_EXTRA_RULES: dict[str, str] = {
+    "gdlibrary.or.kr": (
+        "\n[이 소스 전용 추가 규칙 - 강동구립도서관]\n"
+        "- 참가 대상이 영유아~청소년(만 19세 이하, 예: 영아/유아/미취학아동/초등/중고생)인 프로그램만 다룬다.\n"
+        "- 대상이 성인 전용, 전 연령(제한 없음, 성인 포함), 노인 등 19세 이하로 한정되지 않으면 classification 을 \"행사아님\"으로 한다.\n"
+        "- 본문에 대상 연령이 명시되어 있지 않으면 \"애매\"로 분류한다.\n"
+        "- kids_info 에는 대상 연령/학년 기준이 된 원문 표현을 그대로 적는다.\n"
+    ),
+}
+
+
+def _extra_rules_for(source: str) -> str:
+    for key, rule in SOURCE_EXTRA_RULES.items():
+        if key in source:
+            return rule
+    return ""
+
 
 def _one(raw: dict, post: Post) -> Event | None:
     name = (raw.get("name") or "").strip()
@@ -85,8 +103,9 @@ def extract_events(llm, post: Post, today: str) -> list[Event]:
         f"글 주소: {post.url}\n"
         f"--- 본문 ---\n{body}\n--- 끝 ---"
     )
+    system = SYSTEM + _extra_rules_for(post.source)
     try:
-        data = llm.generate_json(SYSTEM, user)
+        data = llm.generate_json(system, user)
     except LLMError:
         raise
     if isinstance(data, dict):

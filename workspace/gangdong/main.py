@@ -10,7 +10,7 @@ import webbrowser
 from datetime import date, datetime
 from pathlib import Path
 
-from core import config
+from core import checkserver, config
 from core.extract import extract_events
 from core.history import History, event_fp
 from core.images import download as download_image
@@ -100,10 +100,9 @@ def main() -> int:
                 seen_fp_this_run.add(fp)
                 ev.event_fp = fp
 
-                # 이전 실행에서 이미 리포트에 나온 행사는 다시 보여주지 않는다
-                if hist.event_seen_before(ev):
-                    hist.record_event(ev, today.isoformat())  # 마지막 확인일만 갱신
-                    continue
+                # 사용자가 이전 리포트에서 체크(사용함)한 행사는 제외하지 않고,
+                # 리포트 맨 아래쪽으로 밀어서 다시 볼 수 있게 남겨둔다 (report.py 정렬 참고)
+                ev.seen_before = hist.event_checked(fp)
 
                 if ev.poster_url:
                     saved = download_image(
@@ -124,22 +123,38 @@ def main() -> int:
             SourceResult(src, True, f"글 {len(posts)}개 확인, 행사 {found_here}건", len(posts))
         )
 
-    report_path = build_report(run_dir, all_events, source_results, today)
+    # 리포트의 체크박스가 실시간으로 기록할 수 있게, 리포트를 만들기 전에
+    # 로컬 서버부터 띄워서 포트를 리포트 HTML에 넣어준다.
+    server, check_port = checkserver.start(config.DB_PATH)
+
+    report_path = build_report(run_dir, all_events, source_results, today, check_port=check_port)
     hist.close()
 
     real = [e for e in all_events if e.classification == "행사"]
     maybe = [e for e in all_events if e.classification == "애매"]
+    real_checked = sum(1 for e in real if e.seen_before)
 
     print("=" * 50)
     if not real and not maybe:
-        print("완료: 새로 알려줄 행사가 없습니다 (이미 다 안내한 행사들).")
+        print("완료: 알려줄 행사가 없습니다.")
     else:
-        print(f"완료: 새 행사 {len(real)}건, 확인 필요 {len(maybe)}건")
+        print(
+            f"완료: 행사 {len(real)}건 (체크됨 {real_checked}건), "
+            f"확인 필요 {len(maybe)}건"
+        )
     print(f"리포트: {report_path}")
     try:
         webbrowser.open(report_path.resolve().as_uri())
     except Exception:
         print("(브라우저 자동 열기 실패 - 위 경로의 index.html 을 직접 여세요)")
+
+    print("\n리포트에서 체크한 항목은 바로 저장됩니다.")
+    print("확인이 끝나면 여기서 Enter 를 누르세요 (그냥 창을 닫아도 됩니다).")
+    try:
+        input()
+    except (EOFError, KeyboardInterrupt):
+        pass
+    server.shutdown()
     return 0
 
 
